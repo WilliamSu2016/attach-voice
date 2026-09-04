@@ -42,10 +42,10 @@
         {"type": "command", "command": "python -c \"import ast,sys; t=ast.parse(open('src/models.py',encoding='utf-8').read()); assert not any('PyQt6' in (getattr(n,'module','') or '') or any('PyQt6' in a.name for a in getattr(n,'names',[])) for n in ast.walk(t) if isinstance(n,(ast.Import,ast.ImportFrom)))\"", "pass_condition": "exit code 0 — models.py 无 PyQt6 依赖"},
         {"type": "command", "command": "python -m src --version", "pass_condition": "exit code 0"}
       ],
-      "status": "pending",
+      "status": "verified",
       "blocked_reason": null,
-      "verified_at": null,
-      "evidence": null
+      "verified_at": "2026-09-04T16:35:00+08:00",
+      "evidence": "全部 3 条 verification 于 .venv (Python 3.11.0, Windows) 实际执行：(1) Segment/Project 默认值断言 exit 0；(2) models.py AST 无 PyQt6 import exit 0；(3) `python -m src --version` 输出 `attach-voice 0.1.0` exit 0。依赖已按 requirements.txt 固定版本安装成功；`bash init.sh --check` 通过 18 / 警告 2 / 失败 0。详见 agent-progress.md。"
     },
     {
       "id": "F02",

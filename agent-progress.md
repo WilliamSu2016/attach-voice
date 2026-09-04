@@ -9,7 +9,7 @@
 
 | Feature | 标题 | 依赖 | 状态 | 验证执行时间 |
 |---|---|---|---|---|
-| F01 | 项目脚手架与数据模型 | — | `pending` | — |
+| F01 | 项目脚手架与数据模型 | — | `verified` | 2026-09-04T16:35:00+08:00 |
 | F02 | ffmpeg 定位与一键获取 | F01 | `pending` | — |
 | F03 | TTSProvider 抽象与 edge-tts 实现 | F01 | `pending` | — |
 | F04 | 脚本解析与导出 | F01 | `pending` | — |
@@ -23,7 +23,7 @@
 | F12 | PyInstaller 打包 | F11 | `pending` | — |
 | F13 | 文档 | F12 | `pending` | — |
 
-**汇总**：verified 0 / 13 · implemented 0 · in_progress 0 · blocked 0 · pending 13
+**汇总**：verified 1 / 13 · implemented 0 · in_progress 0 · blocked 0 · pending 12
 
 ---
 
@@ -99,7 +99,36 @@
 
 ---
 
-## 5. 待办观察（发现但不属于当前 feature 范围）
+### F01 项目脚手架与数据模型 — verified @ 2026-09-04T16:35:00+08:00
+**变更**：`pending → in_progress → implemented → verified`
+**改动文件**：
+- 新增 `requirements.txt`（PyQt6==6.9.1、edge-tts==7.2.8、pytest==8.4.2、pytest-cov==6.3.0，全部固定版本）
+- 新增 `src/__init__.py`（`__version__ = "0.1.0"`）
+- 新增 `src/__main__.py`（argparse，支持 `--version`；GUI 留待 F07）
+- 新增 `src/models.py`（`Segment` / `Project`，字段与 `docs/ARCHITECTURE.md#4` 逐字一致）
+- 新增 `src/gui/__init__.py`、`src/core/__init__.py`、`src/utils/__init__.py`、`tests/__init__.py`
+- 新建空目录 `scripts/`、`assets/`
+- `feature_list.json` F01 状态更新
+
+**执行环境**：`.venv\Scripts\python.exe`（Windows 侧 Python 3.11.0），PowerShell
+
+| # | 类型 | 命令 / 检查 | 结果 |
+|---|---|---|---|
+| 1 | command | `python -c "import src.models as m; s=m.Segment(text='a', start_time=0.0); p=m.Project(video_path='v.mp4'); assert p.mix_mode=='replace' and p.original_volume==0.2 and s.audio_path is None"` | PASS — 无输出、无断言错误 (exit 0) |
+| 2 | command | `python -c "import ast,sys; t=ast.parse(open('src/models.py',encoding='utf-8').read()); assert not any('PyQt6' in ... )"` | PASS — AST 扫描确认 `models.py` 仅 import `dataclasses`，无 PyQt6、无项目内模块 (exit 0) |
+| 3 | command | `python -m src --version` | PASS — 输出 `attach-voice 0.1.0` (exit 0) |
+
+**附加确认（非验证条目，仅作健全性检查）**：
+- `python -m src`（无参数）输出 `attach-voice 0.1.0 — GUI 尚未接入（见 feature F07）`，exit 0
+- `pip install -r requirements.txt` 成功：PyQt6-6.9.1 / PyQt6-Qt6-6.9.2 / edge-tts-7.2.8 / pytest-8.4.2 / pytest-cov-6.3.0
+- `bash init.sh --check`：通过 18 / 警告 2 / 失败 0（警告为「尚无测试文件」，F04 起消除）
+- `python -m pytest tests/ -q`：exit 5 `no tests ran` —— F01 未定义测试文件，属预期，非 F01 验证条目
+
+**结论**：F01 的全部 3 条 `verification` 条目已实际执行并全部通过 → 置为 `verified`
+**备注**：`requirements.txt` 未纳入 `pytest-qt`，因为 `ARCHITECTURE.md#7` 明确「GUI 不做自动化测试」。
+
+---
+
 
 > 实现过程中发现的、与当前 feature 无关的问题记在这里，不要顺手修改。
 

@@ -1,0 +1,11 @@
+# attach-voice — 运行时与开发依赖（版本固定，见 AGENTS.md 实现规则 6）
+
+# GUI（含 QtMultimedia，用于分段试听）
+PyQt6==6.9.1
+
+# TTS：仅允许 src/core/edge_tts_provider.py 直接 import（规则 B10）
+edge-tts==7.2.8
+
+# 测试
+pytest==8.4.2
+pytest-cov==6.3.0
