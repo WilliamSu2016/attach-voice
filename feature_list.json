@@ -1,0 +1,340 @@
+{
+  "$schema_version": "1.0",
+  "project": "attach-voice",
+  "description": "AI Voiceover for Existing Videos — machine-readable feature list derived from plan.md Todos.",
+  "status_values": [
+    "pending",
+    "in_progress",
+    "implemented",
+    "verified",
+    "blocked"
+  ],
+  "status_rules": {
+    "pending": "Not started.",
+    "in_progress": "Being worked on right now. Only one feature should be in_progress at a time.",
+    "implemented": "Code written, but verification NOT yet executed. This is NOT a completed state.",
+    "verified": "ALL verification[].command entries have been ACTUALLY EXECUTED and passed, with evidence recorded in agent-progress.md. Only this state counts as done.",
+    "blocked": "Cannot proceed; blocked_reason must be filled in."
+  },
+  "hard_rule": "A feature MUST NOT be set to 'verified' merely because source files exist or because the code looks correct. Verification commands must be actually run, and their output recorded in agent-progress.md with a timestamp.",
+  "conventions": {
+    "verification_types": {
+      "command": "Automated: a shell command whose exit code 0 means pass.",
+      "manual": "Human/agent-observed check with an explicit pass condition. Requires evidence note in agent-progress.md."
+    }
+  },
+  "features": [
+    {
+      "id": "F01",
+      "title": "项目脚手架与数据模型",
+      "source_todo": 1,
+      "depends_on": [],
+      "requirements": ["ARCHITECTURE.md#3", "ARCHITECTURE.md#4"],
+      "files": ["requirements.txt", "src/__init__.py", "src/__main__.py", "src/models.py", "src/gui/__init__.py", "src/core/__init__.py", "src/utils/__init__.py", "tests/__init__.py"],
+      "acceptance": [
+        "requirements.txt 固定 PyQt6、edge-tts、pytest 版本",
+        "src/models.py 定义 Segment 与 Project dataclass，字段与 ARCHITECTURE.md#4 完全一致",
+        "src/models.py 不 import 任何项目内模块，也不 import PyQt6",
+        "python -m src 可启动（MVP 阶段可仅打印版本后退出）"
+      ],
+      "verification": [
+        {"type": "command", "command": "python -c \"import src.models as m; s=m.Segment(text='a', start_time=0.0); p=m.Project(video_path='v.mp4'); assert p.mix_mode=='replace' and p.original_volume==0.2 and s.audio_path is None\"", "pass_condition": "exit code 0"},
+        {"type": "command", "command": "python -c \"import ast,sys; t=ast.parse(open('src/models.py',encoding='utf-8').read()); assert not any('PyQt6' in (getattr(n,'module','') or '') or any('PyQt6' in a.name for a in getattr(n,'names',[])) for n in ast.walk(t) if isinstance(n,(ast.Import,ast.ImportFrom)))\"", "pass_condition": "exit code 0 — models.py 无 PyQt6 依赖"},
+        {"type": "command", "command": "python -m src --version", "pass_condition": "exit code 0"}
+      ],
+      "status": "pending",
+      "blocked_reason": null,
+      "verified_at": null,
+      "evidence": null
+    },
+    {
+      "id": "F02",
+      "title": "ffmpeg 定位与一键获取",
+      "source_todo": 2,
+      "depends_on": ["F01"],
+      "requirements": ["PRODUCT.md#R13", "PRODUCT.md D3", "ARCHITECTURE.md#5"],
+      "files": ["src/utils/ffmpeg_locator.py", "tests/test_ffmpeg_locator.py"],
+      "acceptance": [
+        "查找顺序：应用目录 bin/ → PATH → 用户配置路径",
+        "find_ffmpeg() 返回可执行路径或 None，绝不抛出未捕获异常",
+        "download_ffmpeg() 下载 LGPL 静态构建到应用目录",
+        "下载完成后执行 `ffmpeg -version` 校验，校验失败视为下载失败",
+        "缺失时抛出 FFmpegNotFoundError，消息含引导下载的说明"
+      ],
+      "verification": [
+        {"type": "command", "command": "python -m pytest tests/test_ffmpeg_locator.py -q", "pass_condition": "all tests pass"},
+        {"type": "command", "command": "python -c \"from src.utils.ffmpeg_locator import find_ffmpeg, verify_ffmpeg; p=find_ffmpeg(); assert p is None or verify_ffmpeg(p)\"", "pass_condition": "exit code 0"},
+        {"type": "manual", "check": "临时把 PATH 中的 ffmpeg 移除后运行应用，确认出现一键下载引导且下载后可用", "pass_condition": "引导出现且下载后 verify_ffmpeg 通过"}
+      ],
+      "status": "pending",
+      "blocked_reason": null,
+      "verified_at": null,
+      "evidence": null
+    },
+    {
+      "id": "F03",
+      "title": "TTSProvider 抽象与 edge-tts 实现",
+      "source_todo": 3,
+      "depends_on": ["F01"],
+      "requirements": ["PRODUCT.md D5", "PRODUCT.md#R4", "PRODUCT.md#R5", "ARCHITECTURE.md#5"],
+      "files": ["src/core/tts_provider.py", "src/core/edge_tts_provider.py", "tests/test_tts_provider.py"],
+      "acceptance": [
+        "TTSProvider ABC 定义 list_voices(language) 与 synthesize(text, voice, rate, pitch, out_path) -> float",
+        "EdgeTTSProvider 实现 ABC，可列出音色并按语言过滤",
+        "长文本按句子分块合成后拼接，单块不超过设定阈值",
+        "网络失败自动重试（指数退避，至少 3 次），最终失败抛出 TTSNetworkError",
+        "synthesize 返回的时长与实际音频文件时长误差 < 0.05s",
+        "本模块不 import PyQt6"
+      ],
+      "verification": [
+        {"type": "command", "command": "python -m pytest tests/test_tts_provider.py -q", "pass_condition": "all tests pass（含分块与重试的 mock 用例）"},
+        {"type": "command", "command": "python -c \"import inspect; from src.core.tts_provider import TTSProvider; from src.core.edge_tts_provider import EdgeTTSProvider; assert inspect.isabstract(TTSProvider) and issubclass(EdgeTTSProvider, TTSProvider)\"", "pass_condition": "exit code 0"},
+        {"type": "command", "command": "python -c \"from src.core.edge_tts_provider import EdgeTTSProvider; v=EdgeTTSProvider().list_voices('zh'); assert len(v)>0 and all('zh' in x.locale.lower() for x in v)\"", "pass_condition": "exit code 0（需联网）"},
+        {"type": "command", "command": "python scripts/verify_tts_duration.py", "pass_condition": "合成一段已知文本，synthesize 返回时长与 ffprobe 实测误差 < 0.05s"}
+      ],
+      "status": "pending",
+      "blocked_reason": null,
+      "verified_at": null,
+      "evidence": null
+    },
+    {
+      "id": "F04",
+      "title": "脚本解析与导出（.srt / [mm:ss]）",
+      "source_todo": 4,
+      "depends_on": ["F01"],
+      "requirements": ["PRODUCT.md#R3", "PRODUCT.md D1", "ARCHITECTURE.md#5"],
+      "files": ["src/core/script_parser.py", "tests/test_script_parser.py"],
+      "acceptance": [
+        "parse_srt / parse_simple / to_srt 均为纯函数，无 I/O 无网络",
+        "支持 [mm:ss] 与 [hh:mm:ss] 两种简单格式",
+        "时间格式非法、起始时间非递增、段落重叠时抛出 ScriptParseError 且异常消息包含行号",
+        "to_srt(parse_srt(x)) 幂等（时间与文本无损）"
+      ],
+      "verification": [
+        {"type": "command", "command": "python -m pytest tests/test_script_parser.py -q", "pass_condition": "all tests pass"},
+        {"type": "command", "command": "python -m pytest tests/test_script_parser.py -q --cov=src/core/script_parser --cov-fail-under=90", "pass_condition": "行覆盖率 >= 90%"},
+        {"type": "command", "command": "python -c \"import ast; t=ast.parse(open('src/core/script_parser.py',encoding='utf-8').read()); mods=[getattr(n,'module','') or '' for n in ast.walk(t) if isinstance(n,ast.ImportFrom)]+[a.name for n in ast.walk(t) if isinstance(n,ast.Import) for a in n.names]; assert not any(m.startswith(('PyQt6','subprocess','requests')) for m in mods)\"", "pass_condition": "exit code 0 — 无 GUI/IO 依赖"}
+      ],
+      "status": "pending",
+      "blocked_reason": null,
+      "verified_at": null,
+      "evidence": null
+    },
+    {
+      "id": "F05",
+      "title": "音频时间轴合成（补静音 / 截断）",
+      "source_todo": 5,
+      "depends_on": ["F01", "F04"],
+      "requirements": ["PRODUCT.md D2", "PRODUCT.md#A2", "PRODUCT.md#A5", "ARCHITECTURE.md#5"],
+      "files": ["src/core/audio_timeline.py", "tests/test_audio_timeline.py"],
+      "acceptance": [
+        "build_timeline(segments, video_duration) 按 start_time 铺放各段，间隙补静音",
+        "超出 video_duration 的部分被截断，画面时长参数不受影响",
+        "可在不生成实际音频的情况下返回布局与 overflow 标志（供 UI 提前提示）",
+        "处理边界：零段、乱序段、start_time 超出视频时长、段落重叠",
+        "产出单一完整音轨规划（TimelinePlan）"
+      ],
+      "verification": [
+        {"type": "command", "command": "python -m pytest tests/test_audio_timeline.py -q", "pass_condition": "all tests pass"},
+        {"type": "command", "command": "python -m pytest tests/test_audio_timeline.py -q --cov=src/core/audio_timeline --cov-fail-under=90", "pass_condition": "行覆盖率 >= 90%"},
+        {"type": "command", "command": "python scripts/verify_timeline_offsets.py", "pass_condition": "渲染真实音轨后，各段能量起点与设定 start_time 偏差 < 0.2s（PRODUCT A2）"}
+      ],
+      "status": "pending",
+      "blocked_reason": null,
+      "verified_at": null,
+      "evidence": null
+    },
+    {
+      "id": "F06",
+      "title": "视频处理与 ffmpeg 导出",
+      "source_todo": 6,
+      "depends_on": ["F02", "F05"],
+      "requirements": ["PRODUCT.md D4", "PRODUCT.md#R1", "PRODUCT.md#R8", "PRODUCT.md#R9", "PRODUCT.md#A1", "PRODUCT.md#A3"],
+      "files": ["src/core/video_processor.py", "tests/test_video_processor.py"],
+      "acceptance": [
+        "probe(path) 返回时长、分辨率、是否含音轨、视频编码参数",
+        "导出命令包含 -c:v copy -c:a aac",
+        "仅当容器/编码不兼容才回退 -c:v libx264，且通过回调通知上层",
+        "replace 模式丢弃原音轨；overlay 模式使用 amix + volume=original_volume（可调，不写死）",
+        "解析 ffmpeg stderr 的 time= 字段回报进度",
+        "cancel 能终止子进程并清理临时文件",
+        "ffmpeg 路径必须来自 ffmpeg_locator，不得硬编码字符串 'ffmpeg'"
+      ],
+      "verification": [
+        {"type": "command", "command": "python -m pytest tests/test_video_processor.py -q", "pass_condition": "all tests pass（命令构造断言 + 进度解析用例）"},
+        {"type": "command", "command": "python -m pytest tests/test_video_processor.py -q -m integration", "pass_condition": "端到端导出用例通过（需真实 ffmpeg 与样例视频）"},
+        {"type": "command", "command": "python scripts/verify_export.py --assert-duration-delta 0.05", "pass_condition": "输出视频时长与源误差 < 0.05s（PRODUCT A1）"},
+        {"type": "command", "command": "python scripts/verify_export.py --sample 10min_1080p --assert-seconds 15 --assert-no-reencode", "pass_condition": "耗时 < 15s 且 ffprobe 确认视频流编码参数与源一致（PRODUCT A3）"},
+        {"type": "manual", "check": "导出中途点击取消", "pass_condition": "ffmpeg 子进程结束，临时文件被清理，UI 恢复可用"}
+      ],
+      "status": "pending",
+      "blocked_reason": null,
+      "verified_at": null,
+      "evidence": null
+    },
+    {
+      "id": "F07",
+      "title": "GUI 主界面",
+      "source_todo": 7,
+      "depends_on": ["F03", "F04", "F05", "F06"],
+      "requirements": ["PRODUCT.md#3", "PRODUCT.md#R1", "PRODUCT.md#R2", "PRODUCT.md#R4", "PRODUCT.md#R6", "PRODUCT.md#R7", "PRODUCT.md#R10"],
+      "files": ["src/gui/main_window.py", "src/gui/segment_table.py", "src/gui/voice_selector.py"],
+      "acceptance": [
+        "视频选择支持拖拽与文件对话框，选中后显示时长/分辨率/是否含音轨",
+        "分段表格可增行、删行、改文本、改起始时间，并做时间格式与重叠校验",
+        "音色选择支持按语言过滤，语速/音调可调",
+        "每段可单独试听（QtMultimedia）",
+        "显示「视频 X 秒 / 配音占用至 Y 秒」对比",
+        "混音模式切换 + overlay 原声音量滑块（默认 0.2）",
+        "进度条 + 导出 + 仅导出音频按钮",
+        "GUI 层不包含业务算法，仅编排 core 层"
+      ],
+      "verification": [
+        {"type": "command", "command": "python -c \"import ast,glob; bad=[]\nfor f in glob.glob('src/gui/*.py'):\n    t=ast.parse(open(f,encoding='utf-8').read())\n    for n in ast.walk(t):\n        if isinstance(n,ast.Import):\n            bad += [a.name for a in n.names if a.name.startswith('subprocess')]\nassert not bad, bad\"", "pass_condition": "GUI 层不直接调用 subprocess"},
+        {"type": "manual", "check": "启动应用，拖入样例视频，添加 3 段脚本，选择中文音色，生成配音，逐段试听", "pass_condition": "全流程无异常，试听有声音"},
+        {"type": "manual", "check": "切换 replace / overlay 并拖动原声音量滑块", "pass_condition": "参数正确传递到导出结果，overlay 输出可听到降低音量的原声"},
+        {"type": "manual", "check": "点击「仅导出音频」", "pass_condition": "产出 mp3，可播放，内容为完整配音轨（PRODUCT R10）"}
+      ],
+      "status": "pending",
+      "blocked_reason": null,
+      "verified_at": null,
+      "evidence": null
+    },
+    {
+      "id": "F08",
+      "title": "异步串联与任务取消",
+      "source_todo": 8,
+      "depends_on": ["F06", "F07"],
+      "requirements": ["PRODUCT.md#R5", "ARCHITECTURE.md#5"],
+      "files": ["src/utils/async_worker.py"],
+      "acceptance": [
+        "QThread 封装桥接 edge-tts 的 asyncio 调用与 ffmpeg 子进程",
+        "提供 progress / finished / error 信号与 cancel()",
+        "取消后 UI 立即恢复可交互，无僵尸进程与残留临时文件",
+        "不包含任何业务逻辑，仅做线程与信号桥接"
+      ],
+      "verification": [
+        {"type": "manual", "check": "TTS 生成过程中点击取消", "pass_condition": "任务在 1s 内停止，UI 恢复可用，无异常弹窗"},
+        {"type": "manual", "check": "导出过程中点击取消，随后用任务管理器检查", "pass_condition": "无残留 ffmpeg.exe 进程，无残留临时文件"},
+        {"type": "manual", "check": "长任务运行期间拖动窗口 / 点击其他控件", "pass_condition": "UI 不冻结（无「未响应」）"}
+      ],
+      "status": "pending",
+      "blocked_reason": null,
+      "verified_at": null,
+      "evidence": null
+    },
+    {
+      "id": "F09",
+      "title": "配置持久化",
+      "source_todo": 9,
+      "depends_on": ["F07"],
+      "requirements": ["PRODUCT.md#R11", "ARCHITECTURE.md#2 规则7"],
+      "files": ["src/utils/settings.py"],
+      "acceptance": [
+        "使用 QSettings 持久化：音色、语速、音调、输出目录、混音模式、原声音量",
+        "QSettings 仅出现在 settings.py 中",
+        "首次运行使用合理默认值，不因缺失键崩溃"
+      ],
+      "verification": [
+        {"type": "command", "command": "python -c \"import glob,ast; hits=[f for f in glob.glob('src/**/*.py',recursive=True) if 'QSettings' in open(f,encoding='utf-8').read()]; assert hits==['src/utils/settings.py'] or hits==['src\\\\utils\\\\settings.py'], hits\"", "pass_condition": "QSettings 仅在 settings.py 中使用"},
+        {"type": "manual", "check": "设置音色/语速/输出目录/混音模式后关闭应用并重启", "pass_condition": "所有设置被正确恢复"},
+        {"type": "manual", "check": "清空注册表/配置项后启动", "pass_condition": "使用默认值正常启动，无异常"}
+      ],
+      "status": "pending",
+      "blocked_reason": null,
+      "verified_at": null,
+      "evidence": null
+    },
+    {
+      "id": "F10",
+      "title": "错误处理与用户提示",
+      "source_todo": 10,
+      "depends_on": ["F02", "F03", "F06", "F07"],
+      "requirements": ["PRODUCT.md#R12", "PRODUCT.md#A5", "ARCHITECTURE.md#6"],
+      "files": ["src/core/errors.py", "src/gui/main_window.py"],
+      "acceptance": [
+        "覆盖场景：ffmpeg 缺失、视频无音轨、格式不支持、TTS 网络失败与限流重试、段落时间越界",
+        "core 层抛领域异常，GUI 层翻译为中文提示，core 层不弹窗",
+        "配音总时长超出视频时，导出前必须弹窗提示将被截断",
+        "触发视频重编码回退时，UI 提示「正在重新编码视频，耗时较长」"
+      ],
+      "verification": [
+        {"type": "command", "command": "python -c \"import glob; bad=[f for f in glob.glob('src/core/**/*.py',recursive=True) if 'QMessageBox' in open(f,encoding='utf-8').read()]; assert not bad, bad\"", "pass_condition": "core 层不含弹窗代码"},
+        {"type": "command", "command": "python -m pytest tests/test_errors.py -q", "pass_condition": "各领域异常在对应条件下被正确抛出"},
+        {"type": "manual", "check": "断网后点击生成配音", "pass_condition": "重试后给出「网络失败」中文提示，应用不崩溃"},
+        {"type": "manual", "check": "导入无音轨视频并选择 overlay 模式", "pass_condition": "给出明确提示或自动降级为 replace，不产生损坏输出"},
+        {"type": "manual", "check": "构造配音总时长超过视频的工程并导出", "pass_condition": "导出前弹窗提示；输出视频时长与源一致（截断而非改画面，PRODUCT A5）"}
+      ],
+      "status": "pending",
+      "blocked_reason": null,
+      "verified_at": null,
+      "evidence": null
+    },
+    {
+      "id": "F11",
+      "title": "测试与端到端验收",
+      "source_todo": 11,
+      "depends_on": ["F04", "F05", "F06", "F07", "F08", "F09", "F10"],
+      "requirements": ["PRODUCT.md#5 全部验收标准 A1-A5"],
+      "files": ["tests/", "scripts/verify_export.py", "scripts/verify_timeline_offsets.py", "docs/VERIFICATION.md"],
+      "acceptance": [
+        "PRODUCT.md A1-A5 全部有对应的可执行验证脚本或明确的人工检查记录",
+        "单元测试全绿",
+        "端到端脚本在真实样例视频上通过"
+      ],
+      "verification": [
+        {"type": "command", "command": "python -m pytest tests/ -q", "pass_condition": "全部通过，无 skip 关键用例"},
+        {"type": "command", "command": "python scripts/verify_export.py --all", "pass_condition": "A1/A2/A3/A5 全部断言通过"},
+        {"type": "manual", "check": "用 VLC、Windows Media Player、Chrome 分别打开导出文件", "pass_condition": "三者均正常播放，音画同步（PRODUCT A4）"}
+      ],
+      "status": "pending",
+      "blocked_reason": null,
+      "verified_at": null,
+      "evidence": null
+    },
+    {
+      "id": "F12",
+      "title": "PyInstaller 打包",
+      "source_todo": 12,
+      "depends_on": ["F11"],
+      "requirements": ["ARCHITECTURE.md#1", "PRODUCT.md#7 QtMultimedia 风险"],
+      "files": ["attach-voice.spec", "scripts/build.ps1"],
+      "acceptance": [
+        "PyInstaller 产出 Windows 可执行程序",
+        "打包后 QtMultimedia 试听功能可用（重点验证，易遗漏插件）",
+        "打包后 ffmpeg 定位逻辑在应用目录 bin/ 与 PATH 下均可用",
+        "在未安装 Python 的干净 Windows 环境中可运行"
+      ],
+      "verification": [
+        {"type": "command", "command": "pyinstaller attach-voice.spec --noconfirm", "pass_condition": "构建成功，dist/ 下生成可执行文件"},
+        {"type": "manual", "check": "运行 dist 中的可执行文件并试听某一段", "pass_condition": "有声音输出（证明 QtMultimedia 插件已打包）"},
+        {"type": "manual", "check": "在未安装 Python 与 ffmpeg 的干净环境运行 exe", "pass_condition": "应用启动，并正确引导下载 ffmpeg，随后可完成一次完整导出"}
+      ],
+      "status": "pending",
+      "blocked_reason": null,
+      "verified_at": null,
+      "evidence": null
+    },
+    {
+      "id": "F13",
+      "title": "文档",
+      "source_todo": 13,
+      "depends_on": ["F12"],
+      "requirements": ["PRODUCT.md D3 许可", "PRODUCT.md#6"],
+      "files": ["README.md"],
+      "acceptance": [
+        "README 包含：安装步骤、ffmpeg 说明（含一键下载）、使用步骤、运行环境要求、许可声明",
+        "明确注明 ffmpeg 为 LGPL 静态构建、运行时下载、不随包分发",
+        "注明 edge-tts 为非官方接口及其风险"
+      ],
+      "verification": [
+        {"type": "command", "command": "python -c \"t=open('README.md',encoding='utf-8').read(); [__import__('sys').exit(1) for k in ['ffmpeg','LGPL','edge-tts','安装','使用'] if k not in t]\"", "pass_condition": "exit code 0 — 必需章节关键词齐全"},
+        {"type": "manual", "check": "按 README 步骤在干净环境从零走一遍安装与首次导出", "pass_condition": "无需额外查阅其他资料即可成功"}
+      ],
+      "status": "pending",
+      "blocked_reason": null,
+      "verified_at": null,
+      "evidence": null
+    }
+  ]
+}
