@@ -6,6 +6,10 @@ PyQt6==6.9.1
 # TTS：仅允许 src/core/edge_tts_provider.py 直接 import（规则 B10）
 edge-tts==7.2.8
 
+# 精确读取合成音频（mp3）实际时长，用于 synthesize() 返回值校验（PRODUCT.md#R5）
+# 纯 Python 实现，不依赖 ffmpeg/ffprobe（规则 B6 仅 video_processor.py 可调用 ffmpeg/ffprobe）
+mutagen==1.48.1
+
 # 测试
 pytest==8.4.2
 pytest-cov==6.3.0

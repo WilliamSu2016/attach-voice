@@ -117,6 +117,7 @@ pyinstaller attach-voice.spec --noconfirm
 
 1. **一次只做一个 feature**。开始前把该 feature 的 `status` 置为 `in_progress`，且同时只允许一个 `in_progress`。
 2. **遵守依赖顺序**。只有当 `depends_on` 中所有 feature 状态为 `verified` 时，才能开始该 feature。
+   若某个依赖被用户挂起为 `deferred`，下游 feature 同样不可开始，**必须停下来向用户确认**如何处理（拆分依赖 / 一并挂起 / 解除挂起），不得自行绕过。
 3. **不要跳过验证去做下一个 feature**。
 4. **不改上游文档**：`plan.md`、`plan-review.md`、`docs/PRODUCT.md`、`docs/ARCHITECTURE.md` 是稳定层。
    若实现中发现与它们冲突，**停下来向用户确认**，不要私自改文档或偏离设计。
@@ -137,6 +138,11 @@ pyinstaller attach-voice.spec --noconfirm
 pending ──> in_progress ──> implemented ──> verified
                 │                              ▲
                 └──────────> blocked ──────────┘
+
+deferred（用户挂起）
+   ▲   │
+   │   └──> pending          用户决定重新纳入范围时恢复
+   └────────  仅可从 pending / in_progress 进入
 ```
 
 | 状态 | 含义 |
@@ -145,7 +151,20 @@ pending ──> in_progress ──> implemented ──> verified
 | `in_progress` | 正在实现（全局最多一个） |
 | `implemented` | **代码已写完，但验证尚未执行 —— 这不是完成状态** |
 | `verified` | 该 feature 的**所有** `verification[]` 条目都被**实际执行**并通过，证据已记入 `agent-progress.md` |
-| `blocked` | 无法推进，必须填写 `blocked_reason` |
+| `blocked` | **想做但做不了**：受外部阻碍（缺环境、缺能力、缺依赖），必须填写 `blocked_reason` |
+| `deferred` | **主动决定暂不做**：范围/优先级决策导致挂起，并非受阻，必须填写 `deferred_reason` |
+
+#### `blocked` 与 `deferred` 的区别（不可混用）
+
+| | `blocked` | `deferred` |
+|---|---|---|
+| 成因 | 外部阻碍：环境缺失、agent 能力不足、上游依赖未 `verified` | 人的决策：本期不做、优先级下调、等待产品确认 |
+| 是否还想做 | 想做，条件具备就继续 | 明确决定当前不做 |
+| 谁能设置 | agent 可自行判定并设置 | **只有用户可以决定**；agent 不得自行把 feature 标为 `deferred` 来规避实现或验证 |
+| 必填字段 | `blocked_reason` | `deferred_reason` |
+| 解除方式 | 阻碍消除后回到原状态继续推进 | 用户决定重新纳入范围 → 回到 `pending` |
+
+**铁律补充**：`deferred` **不是**「做不完就挂起」的逃生舱。agent 遇到困难时正确的状态是 `blocked`（写明阻碍）或 `implemented`（验证未过），**不得**自行改为 `deferred`。
 
 ### 6.2 铁律
 
@@ -159,6 +178,7 @@ pending ──> in_progress ──> implemented ──> verified
 - 不得为了让验证通过而放宽 `pass_condition` 或删改 `verification` 条目。若某条验证标准确实不合理，**停下来向用户确认**。
 - 不得用 `pytest -k`、`--no-cov`、`|| true` 等方式绕过验证。
 - 环境原因无法执行（如缺少 10 分钟 1080p 样例视频）→ 状态置 `blocked`，写明 `blocked_reason`，**不得**标 `verified`。
+- 不得用 `deferred` 规避实现或验证：`deferred` 只能由**用户**决定（见 6.1），agent 自行遇阻只能置 `blocked`。
 
 ### 6.3 记录格式（写入 `agent-progress.md`）
 
@@ -175,6 +195,8 @@ pending ──> in_progress ──> implemented ──> verified
 ### 6.4 项目级完成定义
 项目只有在 `feature_list.json` 中**全部 13 个 feature 状态为 `verified`**，且 `PRODUCT.md` 的 A1–A5 全部有执行记录时，才算完成。
 
+若存在用户显式挂起的 `deferred` feature，则项目状态记为**「本期范围内完成」**：要求所有**非 `deferred`** 的 feature 均为 `verified`，且在 `session-handoff.md` 中列明被挂起的 feature 清单与 `deferred_reason`。`deferred` 的 feature **不计入**完成，也**不得**被当作已完成对待。
+
 ---
 
 ## 7. 会话开始 / 结束流程
@@ -183,7 +205,7 @@ pending ──> in_progress ──> implemented ──> verified
 1. 读 `AGENTS.md`（本文件）
 2. 读 `docs/PRODUCT.md` 与 `docs/ARCHITECTURE.md`（**强制，不可跳过**）
 3. 读 `session-handoff.md` 了解上次进度
-4. 读 `feature_list.json`，选出「所有 `depends_on` 均为 `verified`」的最小编号 `pending` feature
+4. 读 `feature_list.json`，选出「所有 `depends_on` 均为 `verified`」的最小编号 `pending` feature（跳过 `deferred` 的 feature，不要自行"顺手"恢复它们）
 5. 运行 `bash init.sh` 确认环境可用
 
 **结束时**
@@ -191,3 +213,4 @@ pending ──> in_progress ──> implemented ──> verified
 2. 追加 `agent-progress.md` 记录
 3. 覆盖更新 `session-handoff.md`
 4. 确认没有把未验证的 feature 标成 `verified`
+5. 确认 `blocked` / `deferred` 的 feature 都已填写对应的 `blocked_reason` / `deferred_reason`

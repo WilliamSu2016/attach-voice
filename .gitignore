@@ -2,3 +2,12 @@
 
 # build caches / outputs
 .pytest_cache/
+.coverage
+__pycache__/
+*.pyc
+
+# 一键下载获取的 ffmpeg 二进制（utils/ffmpeg_locator.py），不入库
+/bin/
+
+# 验证脚本自动生成的合成样例视频（scripts/verify_export.py），体积较大，不入库
+/assets/samples/

@@ -1,6 +1,6 @@
 """应用入口：`python -m src`。
 
-MVP 脚手架阶段：仅支持 `--version`，GUI 启动在 F07 接入。
+支持 `--version`（打印版本后退出，不启动 GUI）；其余情况启动 F07 实现的主窗口。
 """
 
 import argparse
@@ -17,8 +17,16 @@ def main(argv: list[str] | None = None) -> int:
         "--version", action="version", version=f"{__app_name__} {__version__}"
     )
     parser.parse_args(argv)
-    print(f"{__app_name__} {__version__} — GUI 尚未接入（见 feature F07）")
-    return 0
+
+    from PyQt6.QtWidgets import QApplication
+
+    from src.gui.main_window import MainWindow
+
+    app = QApplication(sys.argv[:1])
+    window = MainWindow()
+    window.resize(900, 700)
+    window.show()
+    return app.exec()
 
 
 if __name__ == "__main__":
