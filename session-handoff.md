@@ -9,10 +9,10 @@
 
 | 项 | 值 |
 |---|---|
-| 最后更新 | 2026-09-05T19:20:00+08:00 |
-| 会话编号 | S012 |
-| 会话目标 | 实现并验证 F11；会话后段按用户指示新增 `deferred` 流程状态，并调整 F11/F12/F13 状态 |
-| 会话结果 | **本期范围内完成**。F11 已 `verified`（验证项 1、2 由 agent 实际执行通过；验证项 3 即 PRODUCT A4 由**用户人工确认**）。F12、F13 经用户指示置为 `deferred`（主动挂起，非受阻）。流程层面新增了 `deferred` 状态并写入 `AGENTS.md` 与 `feature_list.json`。 |
+| 最后更新 | 2026-09-05T22:16:00+08:00 |
+| 会话编号 | S016 |
+| 会话目标 | （承 S014/S015）修复缺陷"重新生成配音后试听仍放旧配音"；补齐 PRODUCT.md R6「每段独立试听」（逐行试听按钮 + 全局按时间轴渲染播放）；（本段）按用户指示，取消「试听」「试听已生成配音」「仅导出音频」必须先选视频的前提，仅「导出视频」保留该前提 |
+| 会话结果 | **本期范围内完成，四处 GUI 交互问题已处理**。F11 `verified`；F12/F13 `deferred`（用户指示）。缺陷修复 1：重新生成配音后试听放旧配音（O16/O17/O18）。缺陷修复 2：逐段独立试听按钮 + 全局按序连续播放。缺陷修复 3：全局试听改为按时间轴渲染播放。缺陷修复 4（本段）：`_build_timeline_plan()` 新增 `require_video` 参数，未选视频时改用最后一段配音结束时间作为时间轴总长；`_on_export_audio_only_clicked`/`_on_preview_clicked` 均传 `require_video=False`，仅 `_build_project_and_plan`（供「导出视频」使用）仍传 `True`。`tests/test_segment_preview_controls.py` 更新为 8 条用例，`scripts/verify_segment_preview_controls.py` 新增"清空视频后仍能正常渲染播放"场景，共 10/10 PASS。全量测试 **158 passed**。**未改变任何 feature 的状态**，均为对已 `verified` 的 F07 试听/导出交互的缺陷修复/需求补齐。新增流程教训 **O19**（负向对照严禁用 `git checkout --` 撤销，见下）。 |
 
 ---
 
@@ -70,7 +70,116 @@ F12/F13 **不计入完成**，也不得被当作已完成对待。
 3. **状态调整（用户指示，2026-09-05T19:15）**：
    - F11 `blocked` → `verified`：验证项 3 由**用户人工确认**通过。已在 `feature_list.json` 的 `evidence`、`agent-progress.md` 的记录与台账、`docs/VERIFICATION.md` 中**如实区分**"agent 实际执行"与"用户人工确认"两类证据来源，未把用户确认包装成 agent 的执行证据。
    - F12、F13 `pending` → `deferred`，并填写 `deferred_reason`（明确记录是谁、何时、基于什么理由决定的，以及"非受阻"的性质）。
-4. 未触碰任何应用代码（`src/`、`tests/` 本次会话后段无改动）；未修改 `plan.md`、`plan-review.md`、`docs/PRODUCT.md`、`docs/ARCHITECTURE.md`。
+4. 未修改 `plan.md`、`plan-review.md`、`docs/PRODUCT.md`、`docs/ARCHITECTURE.md`。
+5. **缺陷修复（用户报告，会话后段）**：见下节「本次会话修复的缺陷」。
+
+### 本次会话修复的缺陷：重新生成配音后试听仍播放旧配音
+
+> **不是新 feature，也没有改变任何 feature 的状态。** 涉及代码归属 F07/F08，二者仍为 `verified`。
+
+- **现象**：生成配音 → 修改文本 → 再次生成配音 → 点击「试听」，播放的仍是第一次的配音。
+- **根因（两层叠加）**：(a) `_generate_narration()` 固定写到 `out_dir/seg{i}.mp3`，第二次生成**原地覆盖**，两次 `Segment.audio_path` 字符串完全相同；(b) `QMediaPlayer.setSource()` 对"与当前相同的 URL"跳过重新加载，继续播放已缓冲的旧音频，且旧文件句柄未释放。
+- **修复**（`src/gui/main_window.py` 两处）：`_generate_narration()` 每次生成写入独立的 `out_dir/run-<uuid4[:8]>/` 子目录；`_on_preview_clicked()` 设新源前先 `stop()` + `setSource(QUrl())` 清空（纵深防御）。
+- **新增**：`tests/test_main_window_preview.py`（4 条回归单测；**修复前实测 3 failed 复现缺陷**，修复后 4 passed）、`scripts/verify_preview_refresh.py`（真实 `MainWindow` + 真实 `QTest` 点击 + **真实 edge-tts 合成** + 真实 `QMediaPlayer`，12 项断言，分「磁盘层」与「播放器缓存层」两层判定）。
+- **验证结果**：`pytest tests/ -q` → **149 passed**（原 145 + 新增 4）；`python scripts/verify_preview_refresh.py` → **12/12 PASS, exit 0**。关键数据：第一次 `run-ac17ef79/seg0.mp3` = 2.448s，第二次 `run-5be6145a/seg0.mp3` = 22.128s，第一次的文件仍存在未被覆盖，第二次试听后**播放器自身报告** `duration()` = 22.128s。
+- **负向对照（本次最有价值的一步）**：`git stash` 临时回退修复后重跑脚本 → exit 1，2 项 FAIL，恰好各自命中两层根因（路径未变；`player.duration()` 报 **2.448s** 旧配音）。该实验还暴露出脚本最初的 ffprobe 磁盘侧断言**在缺陷版本上照样 PASS**（因原地覆盖，磁盘内容早已是新的），据此才补入了 `QMediaPlayer.duration()` 这条真正有区分力的断言 —— 详见观察 **O18**。
+- **新增观察**：**O16**（缺陷类型化教训 —— 多轮触发场景必须至少验证两轮且第二轮输入不同）、**O17**（`_tmp_dir` 无 `closeEvent` 清理，按范围纪律未顺手改，已写明建议做法）、**O18**（修复缺陷后必须做负向对照；断言要打在症状发生的那一层）。
+
+### 本次会话补齐的需求：逐段独立试听按钮 + 全局按钮改为按序连续播放
+
+> **不是新 feature，是对已 `verified` 的 F07 中「试听」交互的需求补齐，未改变任何 feature 状态。**
+> 用户发现 `_on_preview_clicked()` 一直只播放 `_synthesized_segments[0]`（永远第一段），未真正
+> 实现 `docs/PRODUCT.md` R6「每段独立试听」；确认方案后按用户指示实现。
+
+- **改动**：`src/gui/segment_table.py` 每行「删除」按钮左侧新增「试听」按钮，发出
+  `preview_row_requested(row)` 信号（按控件身份重新定位当前行号，删除行后仍正确）。
+  `src/gui/main_window.py` 新增 `_preview_queue`/`_preview_queue_pos` + `_on_media_status_changed`
+  （监听 `mediaStatusChanged`，`EndOfMedia` 时推进队列播放下一段）；`_on_preview_clicked()`
+  （全局按钮）改为把全部已生成段落按序入队连续播放；新增 `_on_segment_preview_requested(row)`
+  （单行「试听」，清空队列后只播该行，避免与连续播放混淆）。
+- **新增**：`tests/test_segment_preview_controls.py`（7 条单测：按钮布局、行号跟随删除更新、
+  单行试听清空队列、全局按序建队、`EndOfMedia` 正确推进、末段播完队列清空不越界、连续播放中途
+  切单行试听不误续播）；`scripts/verify_segment_preview_controls.py`（真实 `MainWindow` + 真实
+  `QTest` 点击 + **真实 edge-tts 合成 3 段时长两两可辨（2.18s/8.09s/21.82s）** + 真实
+  `QMediaPlayer` **真实播放并等待其自然触发 `EndOfMedia`**，非手动模拟）。
+- **验证结果**：`pytest tests/test_segment_preview_controls.py -q` → 7 passed；
+  `pytest tests/ -q`（全量）→ **156 passed**（149 + 新增 7）；
+  `python scripts/verify_segment_preview_controls.py` → **9/9 PASS, exit 0**（点第 3 行试听只播
+  段 C；点全局按钮从段 A 开始，真实等待 2.18s/8.09s/21.82s 后依次自然切到段 B、段 C、清空队列）。
+- **负向对照**（沿用 O18 方法论）：`git stash` 临时回退本次改动后重跑脚本 → exit 1，2 项 FAIL
+  （无「试听」按钮列；`_preview_queue` 属性不存在），恢复后 `git diff --stat` 确认改动完整。
+
+### 本次会话补齐的需求：全局「试听已生成配音」改为按时间轴渲染播放
+
+> **不是新 feature，是对已 `verified` 的 F07 中「全局试听」交互的进一步需求补齐，未改变任何
+> feature 状态。** 用户指出上一轮"按序连续播放"仍不对：那是把各段原始文件掐头去尾首尾拼接，
+> 没有按 `start_time` 摆放、没有段间静音间隔，不像导出结果那样"按时间轴播放"；并要求确认
+> 「仅导出音频」也按时间轴、含全部分段。
+
+- **调查结论**：「仅导出音频」经代码走查确认**本来就正确**（复用 `build_timeline`+
+  `export_audio_only`，与导出视频共用同一套时间轴规划/渲染路径），本次未改动该按钮代码，只
+  补充了一条更强的多段+间隔集成测试。「全局试听」才是需要修复的地方。
+- **改动**：`src/gui/main_window.py` 新增 `_build_timeline_plan(action_label)`（从
+  `_build_project_and_plan()` 抽出公共的"校验视频/分段就绪 + `build_timeline()` +
+  `AudioTimelineError` 处理"逻辑，供导出与试听共用）；移除 `_preview_queue`/
+  `_preview_queue_pos`/`_on_media_status_changed`；`_on_preview_clicked()` 改为构建
+  `TimelinePlan` 后用 `WorkerThread` 异步调用 `_export_audio_only_task` 渲染到临时文件（复用
+  「仅导出音频」的核心渲染函数，保证与导出结果字节级一致），渲染完成后播放该文件；
+  `_on_segment_preview_requested(row)` 简化（不再需要清空队列）。
+- **测试重写**：`tests/test_segment_preview_controls.py`（原 3 条依赖 `_preview_queue` 的用例
+  已失效，重写为 7 条新用例：按钮布局/行号不变，单行试听 2 条，全局试听新增 3 条——缺视频/缺
+  已合成分段报错、通过 monkeypatch 替身断言真正构建了覆盖全时长且按顺序含全部分段的
+  `TimelinePlan` 并在渲染完成后播放渲染产物）；`scripts/verify_segment_preview_controls.py`
+  重写为：真实合成 40 秒 lavfi 视频 + 3 段真实 edge-tts 配音（`start_time`=0/15/30，段间必有
+  真实静音间隔），真实点击全局按钮等待真实 `WorkerThread`（内部真实调用 ffmpeg）渲染完成，
+  用真实 ffprobe 校验渲染产物总时长 ≈ 视频时长（证明含静音间隔，非简单拼接）。
+- **新增**：`tests/test_video_processor.py::test_export_audio_only_multi_segment_with_gaps_places_segments_at_start_time_real_ffmpeg`
+  （`@pytest.mark.integration`）：2 段真实配音 + 3 秒真实静音间隔，用真实 ffmpeg
+  `silencedetect` 滤镜确认输出文件里存在落在"段 0 结束附近"的静音区间，佐证「仅导出音频」
+  已正确按时间轴含全部分段（本次未改动该按钮代码）。
+- **验证结果**：`pytest tests/test_segment_preview_controls.py -q` → 7 passed；
+  `pytest tests/test_video_processor.py -q -m integration -k multi_segment` → 1 passed；
+  `pytest tests/ -q`（全量，含全部 integration 用例）→ **157 passed**（156 + 新增 1）；
+  `python scripts/verify_segment_preview_controls.py` → **8/8 PASS, exit 0**（视频探测时长
+  40.0s；点第 2 行「试听」立即指向该段原始文件；点全局按钮等待真实 ffmpeg 渲染完成后，
+  播放器 source 是渲染出的临时文件（不等于任何一段原始文件），真实 ffprobe 探测其时长为
+  40.00s = 视频时长）。
+- **负向对照**（沿用 O18 方法论）：`git stash push -- src/gui/main_window.py` 临时回退改动
+  后重跑脚本 → exit 1，3 项 FAIL（点行「试听」未指向原始文件；全局试听播放的仍是段 0 原始
+  文件而非渲染产物；渲染"时长"实际就是段 0 时长 2.18s ≠ 视频时长 40s），`git stash pop` 恢复
+  后确认改动完整、全量回归仍 157 passed。
+
+### 本次会话补齐的需求：「试听」「试听已生成配音」「仅导出音频」取消"必须先选视频"的前提
+
+> **不是新 feature，是对已 `verified` 的 F07 中导出/试听交互的进一步需求补齐，未改变任何
+> feature 状态。** 用户明确指出：这三个只处理配音本身的操作不应该要求先选视频，只有需要把
+> 配音混入真实视频画面的「导出视频」才必须先选视频。
+
+- **改动**：`_build_timeline_plan(action_label, *, require_video=True)` 新增 `require_video`
+  参数——已选视频时仍以其时长为准；未选视频且 `require_video=False` 时改用**最后一段配音的
+  结束时间**作为时间轴总长（不再要求先选视频）；未选视频且 `require_video=True`（仅供「导出
+  视频」使用）维持原有报错。抽出 `_confirm_truncation_if_needed(plan)` 供「导出视频」「仅
+  导出音频」共用截断确认弹窗逻辑。`_on_export_audio_only_clicked()` 改为直接调用
+  `_build_timeline_plan(..., require_video=False)`，不再依赖会强制要求视频的
+  `_build_project_and_plan()`；`_on_preview_clicked()`（全局试听）同样传 `require_video=False`。
+- **测试更新**：`tests/test_segment_preview_controls.py` 移除过时的"未选视频应报错"用例，
+  新增"未选视频不报错、`TimelinePlan.total_duration` = 最后一段配音结束时间"用例（全局试听 +
+  仅导出音频各一条，共 8 条）；`scripts/verify_segment_preview_controls.py` 追加"清空已选
+  视频后重新点击全局试听"场景，真实验证不报错、真实渲染完成、渲染时长变为最后一段配音结束
+  时间（32.83s）而非原视频时长（40s）。
+- **验证结果**：`pytest tests/test_segment_preview_controls.py -q` → 8 passed；
+  `pytest tests/ -q`（全量）→ **158 passed**（157 + 新增 1）；
+  `python scripts/verify_segment_preview_controls.py` → **10/10 PASS, exit 0**。
+- **负向对照**：把源码中 `require_video=False` 全部临时替换为 `True` 后重跑单测 → 2 项
+  FAIL（全局试听/仅导出音频在未选视频时均误报"请先选择视频"），确认脚本有真实区分力。
+- **本次流程事故与教训（新增观察 O19）**：负向对照恢复阶段一度误用
+  `git checkout -- src/gui/main_window.py`，结果撤销了该文件**本次会话此前的全部未提交改动**
+  （而不只是刚才的临时替换），一度丢失了缺陷修复 1/2/3 的全部实现。靠 `git fsck --unreachable`
+  从此前 `git stash pop` 留下的悬挂提交中 `git show <sha>:path > file` 找回，最终确认恢复正确
+  （全量回归仍 158 passed），未造成实际损失，但过程凭运气。**结论：临时改动源码做负向对照，
+  事后严禁用 `git checkout --`/`git restore` 撤销**（那是整文件级操作，会抹掉所有未提交改动），
+  应改用「改动前 `git diff > backup.patch`，验证完 `git apply backup.patch` 精确恢复」或
+  「与临时改动完全对称的逆操作原地改回」。详见 O19。
 
 ### 流程规范变更：新增 `deferred` 状态
 
@@ -107,8 +216,10 @@ F12/F13 **不计入完成**，也不得被当作已完成对待。
 ### 健康检查命令（确认现状未变）
 ```powershell
 .\.venv\Scripts\Activate.ps1
-python -m pytest tests\ -q            # 应为 145 passed（含 integration，真实网络+真实 ffmpeg，较慢）
-python scripts\verify_export.py --all # 应为 A1/A2/A3/A5 全部 PASS，exit 0
+python -m pytest tests\ -q                          # 应为 158 passed（含 integration，真实网络+真实 ffmpeg，较慢）
+python scripts\verify_export.py --all               # 应为 A1/A2/A3/A5 全部 PASS，exit 0
+python scripts\verify_preview_refresh.py            # 试听刷新缺陷回归，应为 12/12 PASS，exit 0（真实 TTS，需联网）
+python scripts\verify_segment_preview_controls.py   # 逐段试听 + 全局按时间轴渲染播放 + 无需视频前提，应为 10/10 PASS，exit 0（真实 TTS + 真实 ffmpeg，需联网）
 ```
 
 ---
@@ -137,4 +248,11 @@ python scripts\verify_export.py --all # 应为 A1/A2/A3/A5 全部 PASS，exit 0
 12. **观察 O14**：`scripts/verify_gui_flow.py` 曾两次在真实导出步骤附近卡死（CPU 趋近 0）。若再次运行仍卡死，需认真排查根因而非归为偶发。
 13. **观察 O15**：脚本化改写 `feature_list.json` **不要**用 `json.dump(indent=2)`——原文件的 `depends_on`/`requirements`/`files`/`verification` 是紧凑单行风格，标准 dump 会展开成 500+ 行格式噪音 diff。需用保持原风格的自定义序列化器 + round-trip 断言。
 14. **观察 O5**（F03 多块分句合成路径未做真实网络端到端联调）、**O11**（F08 TTS 取消粒度限制）、**O7**（PRODUCT R10「仅导出音频」的 feature 归属未明确）仍未关闭，若用户后续扩展范围可一并复核。
-15. 各 `scripts/verify_*.py` 会在 `assets/samples/`/临时目录生成样例文件，已被 `.gitignore` 排除。其中 `assets/samples/a4_manual_check_*` 是 A4 人工复核的证据文件，**建议保留**，不要当临时文件清理。
+15. **观察 O16（重要，缺陷类型化教训）**：凡"同一路径被反复写入 + 交给带缓存的播放/加载组件"的组合都会重演"试听放旧内容"这类缺陷。**新增任何可重复触发的 GUI 操作（重新生成、重新导出、重新加载视频等），验证时必须至少跑两轮且第二轮输入不同，并断言产物确实随输入变化**，而不只断言单轮结果正确。F07/F08 原有验证只覆盖单轮路径，正是因此漏掉了该缺陷。
+16. **观察 O17**：`MainWindow` 仍无 `closeEvent` 清理 `self._tmp_dir`（临时目录泄漏，既有问题）。若要修，需在删除前先 `stop()` + `setSource(QUrl())` 释放播放器句柄；**不要**改成"生成前删除上一轮产物"，那会重新引入试听读到已删文件的缺陷。
+17. **观察 O18（重要，验证方法论）**：**修复缺陷后必须做「负向对照」**——临时回退修复（`git stash`）重跑验证脚本，确认它**确实会 FAIL**，且 FAIL 的正是对应根因的那一条。本次若不做这一步，就会交付一个漏判"播放器缓存层"的验证脚本：ffprobe 查磁盘文件的断言在缺陷版本上照样 PASS（因为缺陷是原地覆盖，磁盘内容早已是新的）。**断言必须打在症状发生的那一层**（症状在播放器缓存，就得查 `QMediaPlayer.duration()`）。本项目此前的 `verify_*.py` 均未做过负向对照，可信度未经此检验。
+18. **`SegmentTable` 列布局已变化**：`_COL_START_TIME=0, _COL_TEXT=1, _COL_PREVIEW=2, _COL_REMOVE=3`（原来删除按钮在列 2，现在列 3；新增的每行「试听」按钮在列 2）。若后续脚本用 `cellWidget(row, 2)` 期望拿到删除按钮，会拿错到试听按钮——写新验证脚本时留意。
+19. 各 `scripts/verify_*.py` 会在 `assets/samples/`/临时目录生成样例文件，已被 `.gitignore` 排除。其中 `assets/samples/a4_manual_check_*` 是 A4 人工复核的证据文件，**建议保留**，不要当临时文件清理。
+20. **全局「试听已生成配音」按钮已不再是"队列播放"**：`MainWindow` 不再有 `_preview_queue`/`_preview_queue_pos`/`_on_media_status_changed`。全局试听现在会先异步渲染出一个临时时间轴音轨文件（复用 `_export_audio_only_task`），再播放该文件；`_media_player.source()` 点击全局按钮后指向的是**渲染产物路径**，不是任何一段原始配音文件——若后续再写验证脚本，不要照抄旧脚本里"断言 source 依次等于各段 `audio_path`"的写法。逐行「试听」按钮语义未变（仍直接播放该行原始文件）。
+21. **「试听」「试听已生成配音」「仅导出音频」不再要求先选视频**，只有「导出视频」需要。`_build_timeline_plan(action_label, *, require_video=True/False)` 是唯一的时间轴构建入口：未选视频且 `require_video=False` 时用**最后一段配音的结束时间**当作时间轴总长。若后续新增依赖时间轴的功能，记得按"是否真的需要视频画面"决定传哪个值，不要一律沿用旧的 `require_video=True` 默认值。
+22. **观察 O19（重要，工具使用教训）**：**负向对照时若用直接编辑源码的方式临时改动（而非 `git stash`），事后严禁用 `git checkout --`/`git restore` 撤销**——那是整文件级操作，会连同该文件此前全部未提交改动一并抹掉，不是撤销"最近一次改动"。正确做法：(a) 改动前 `git diff <file> > backup.patch`，验证完 `git apply backup.patch` 精确恢复；(b) 用与临时改动完全对称的逆操作原地改回。本次一度因此丢失 `src/gui/main_window.py` 整个会话的改动，靠 `git fsck --unreachable` 从此前 `stash pop` 留下的悬挂提交中找回，纯属侥幸（若该 stash 已被 gc 清理则无法找回）。

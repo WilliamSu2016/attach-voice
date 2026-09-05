@@ -553,6 +553,67 @@ def test_export_audio_only_produces_playable_mp3_real_ffmpeg(tmp_path):
 
 
 @pytest.mark.integration
+def test_export_audio_only_multi_segment_with_gaps_places_segments_at_start_time_real_ffmpeg(tmp_path):
+    """针对用户反馈"仅导出音频应包含所有分段且按时间轴播放"的强化验证：2 段配音、
+    段间/段前均留有真实静音间隔，渲染后用 `silencedetect` 校验静音出现在预期的位置和时长
+    （而不是简单地把两段配音掐头去尾拼接、丢失 start_time 决定的间隔）。"""
+    from src.core.edge_tts_provider import EdgeTTSProvider
+    from src.core.audio_timeline import build_timeline
+    from src.models import Segment
+
+    provider = EdgeTTSProvider()
+    seg0_path = str(tmp_path / "seg0.mp3")
+    seg1_path = str(tmp_path / "seg1.mp3")
+    dur0 = provider.synthesize("第一段。", "zh-CN-XiaoxiaoNeural", "+0%", "+0Hz", seg0_path)
+    dur1 = provider.synthesize("第二段。", "zh-CN-XiaoxiaoNeural", "+0%", "+0Hz", seg1_path)
+
+    gap = 3.0  # 段 0 结束到段 1 开始之间人为留出的静音间隔
+    seg1_start = dur0 + gap
+    video_duration = seg1_start + dur1 + 1.0  # 结尾再留 1 秒尾部静音
+
+    segments = [
+        Segment(text="第一段。", start_time=0.0, audio_path=seg0_path, duration=dur0),
+        Segment(text="第二段。", start_time=seg1_start, audio_path=seg1_path, duration=dur1),
+    ]
+    plan = build_timeline(segments, video_duration=video_duration)
+
+    out_path = str(tmp_path / "narration_multi.mp3")
+    vp.export_audio_only(plan, out_path)
+
+    assert Path(out_path).is_file() and Path(out_path).stat().st_size > 0
+
+    ffmpeg_path = vp._ffmpeg_path()
+    ffprobe_path = vp._ffprobe_path(ffmpeg_path)
+
+    result = subprocess.run(
+        [ffprobe_path, "-v", "error", "-show_entries", "format=duration",
+         "-of", "json", out_path],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30,
+    )
+    assert result.returncode == 0
+    reported_duration = float(json.loads(result.stdout)["format"]["duration"])
+    assert reported_duration == pytest.approx(video_duration, abs=0.3)
+
+    # silencedetect：确认段 0 与段 1 之间确实存在一段 >= 2 秒的静音（真实静音间隔，
+    # 不是两段配音掐头去尾拼接后完全没有间隔）。
+    silence_result = subprocess.run(
+        [ffmpeg_path, "-i", out_path, "-af", "silencedetect=noise=-30dB:d=1", "-f", "null", "-"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30,
+    )
+    stderr_text = silence_result.stderr.decode("utf-8", errors="replace")
+    silence_starts = [
+        float(line.split("silence_start:")[1].strip())
+        for line in stderr_text.splitlines()
+        if "silence_start:" in line
+    ]
+    assert silence_starts, f"应至少检测到一段静音区间，实际 stderr:\n{stderr_text}"
+    # 段间静音应大致出现在段 0 结束附近（允许一定容差）。
+    assert any(abs(s - dur0) < 1.0 for s in silence_starts), (
+        f"未在段 0 结束（约 {dur0:.2f}s）附近检测到静音起点，实际 silence_starts={silence_starts}"
+    )
+
+
+@pytest.mark.integration
 def test_export_cancel_terminates_process_and_cleans_up(tmp_path, sample_video):
     from src.core.audio_timeline import build_timeline
     from src.models import Segment

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import List, Optional
 
+from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtWidgets import (
     QDoubleSpinBox,
     QHeaderView,
@@ -22,15 +23,22 @@ from src.models import Segment
 
 _COL_START_TIME = 0
 _COL_TEXT = 1
-_COL_REMOVE = 2
+_COL_PREVIEW = 2
+_COL_REMOVE = 3
 
-_HEADERS = ["起始时间 (秒)", "文本", ""]
+_HEADERS = ["起始时间 (秒)", "文本", "", ""]
 
 
 class SegmentTable(QTableWidget):
     """脚本分段表格。每行对应一个 `Segment`（不含 audio_path/duration，那些是运行期填充的
     合成结果，不属于用户编辑的原始输入）。
+
+    每行提供一个「试听」按钮（删除按钮左侧），点击时发出 `preview_row_requested(row)` 信号，
+    由 `MainWindow` 负责查该行对应的已合成音频并播放——本类不持有音频路径/播放器，遵守
+    ARCHITECTURE.md 规则 B8（GUI 表格只做编排展示，不碰业务数据/播放逻辑）。
     """
+
+    preview_row_requested = pyqtSignal(int)
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(0, len(_HEADERS), parent)
@@ -50,9 +58,19 @@ class SegmentTable(QTableWidget):
 
         self.setItem(row, _COL_TEXT, QTableWidgetItem(text))
 
+        preview_btn = QPushButton("试听", self)
+        preview_btn.clicked.connect(lambda: self._emit_preview_by_widget(preview_btn))
+        self.setCellWidget(row, _COL_PREVIEW, preview_btn)
+
         remove_btn = QPushButton("删除", self)
         remove_btn.clicked.connect(lambda: self._remove_row_by_widget(remove_btn))
         self.setCellWidget(row, _COL_REMOVE, remove_btn)
+
+    def _emit_preview_by_widget(self, button: QPushButton) -> None:
+        for row in range(self.rowCount()):
+            if self.cellWidget(row, _COL_PREVIEW) is button:
+                self.preview_row_requested.emit(row)
+                return
 
     def _remove_row_by_widget(self, button: QPushButton) -> None:
         for row in range(self.rowCount()):

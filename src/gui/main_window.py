@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import tempfile
+import uuid
 from pathlib import Path
 from typing import Any, Callable, List, Optional
 
@@ -77,13 +78,20 @@ def _generate_narration(
 ) -> List[Segment]:
     """逐段调用 TTSProvider 合成，每段之间轮询 `cancel_token`（无法中断单段合成中途，
     但可在段落边界及时响应取消，满足 PRODUCT.md R5「任务可取消」）。
+
+    每次调用都把产物写进 `out_dir` 下一个**独立的子目录**，而不是固定的 `out_dir/seg{i}.mp3`。
+    否则用户改完文本重新生成时会原地覆盖上一次的文件，导致两次的 `Segment.audio_path` 完全
+    相同：`QMediaPlayer.setSource()` 认为源未改变而不重新加载，试听放出来的仍是旧配音；在
+    Windows 上播放器还可能仍持有旧文件句柄，原地覆盖存在写入失败的风险。
     """
     synthesized: List[Segment] = []
     total = len(segments)
+    run_dir = Path(out_dir) / f"run-{uuid.uuid4().hex[:8]}"
+    run_dir.mkdir(parents=True, exist_ok=True)
     for i, seg in enumerate(segments):
         if cancel_token.is_cancelled():
             raise TaskCancelledError("生成配音已被用户取消。")
-        out_path = str(Path(out_dir) / f"seg{i}.mp3")
+        out_path = str(run_dir / f"seg{i}.mp3")
         duration = tts_provider.synthesize(seg.text, voice, rate, pitch, out_path)
         synthesized.append(
             Segment(text=seg.text, start_time=seg.start_time, audio_path=out_path, duration=duration)
@@ -165,12 +173,17 @@ class MainWindow(QMainWindow):
 
         # 分段表格
         self._segment_table = SegmentTable(self)
+        self._segment_table.preview_row_requested.connect(self._on_segment_preview_requested)
         root_layout.addWidget(self._segment_table, stretch=1)
 
         table_btn_row = QHBoxLayout()
         self._add_row_btn = QPushButton("添加分段", self)
         self._add_row_btn.clicked.connect(lambda: self._segment_table.add_row())
         self._preview_btn = QPushButton("试听已生成配音", self)
+        self._preview_btn.setToolTip(
+            "按时间轴渲染完整配音轨（含段间静音间隔、超长截断）后播放，效果与「仅导出音频」/"
+            "「导出视频」中的配音完全一致。如需单独试听某一段原始配音，请点击该行的「试听」按钮。"
+        )
         self._preview_btn.clicked.connect(self._on_preview_clicked)
         table_btn_row.addWidget(self._add_row_btn)
         table_btn_row.addWidget(self._preview_btn)
@@ -441,28 +454,115 @@ class MainWindow(QMainWindow):
         )
 
     # ------------------------------------------------------------------
-    # 试听（简化：播放第一段已生成配音；逐段试听可后续通过表格内嵌按钮扩展）
+    # 试听：全局按钮＝按分段顺序连续播放全部；每行「试听」按钮＝只播放该段
     # ------------------------------------------------------------------
+    # 试听：全局按钮＝按时间轴渲染完整配音轨（与导出共用同一套逻辑）后播放；
+    # 每行「试听」按钮＝直接播放该段原始配音文件，不涉及时间轴。
+    # ------------------------------------------------------------------
+    def _play_audio_path(self, audio_path: str) -> None:
+        """统一的播放入口：先停止并清空旧源再设置新源。
+
+        `QMediaPlayer.setSource()` 对"与当前相同的 URL"会跳过重新加载，且不清空时可能继续
+        持有上一个文件的句柄/缓冲，导致重新生成后试听仍放旧配音（详见 agent-progress.md O16）。
+        """
+        self._media_player.stop()
+        self._media_player.setSource(QUrl())
+        self._media_player.setSource(QUrl.fromLocalFile(audio_path))
+        self._media_player.play()
+
     def _on_preview_clicked(self) -> None:
-        if not self._synthesized_segments:
-            self._show_error("试听失败", "请先点击「生成配音」。")
+        """全局「试听已生成配音」：按时间轴渲染完整配音轨后播放。
+
+        与「仅导出音频」「导出视频」共用同一套时间轴渲染逻辑（`build_timeline` +
+        `export_audio_only`），因此试听听到的段间静音间隔、超长截断行为与实际导出结果完全
+        一致——而不是把各段配音文件掐头去尾地按列表顺序首尾拼接播放（那样会丢失 `start_time`
+        决定的间隔与截断，不能反映真实的时间轴效果）。渲染需要真实调用一次 ffmpeg（耗时 I/O），
+        因此通过 `WorkerThread` 异步执行，避免阻塞 UI（复用 F08 建立的异步基础设施）。
+
+        不要求先选择视频（`require_video=False`）：只处理配音本身即可回答"这些配音合起来
+        听起来如何"，未选视频时以最后一段配音的结束时间作为时间轴总长。
+        """
+        plan = self._build_timeline_plan("试听失败", require_video=False)
+        if plan is None:
             return
-        audio_path = self._synthesized_segments[0].audio_path
+        preview_path = str(Path(self._tmp_dir) / f"preview-{uuid.uuid4().hex[:8]}.mp3")
+        worker = WorkerThread(_export_audio_only_task, plan, preview_path)
+        self._start_worker(
+            worker,
+            self._on_preview_render_finished,
+            on_error=lambda exc: self._show_error("试听失败", f"渲染试听音轨失败：{exc}"),
+        )
+
+    def _on_preview_render_finished(self, out_path: str) -> None:
+        self._progress_bar.setValue(100)
+        self._play_audio_path(out_path)
+
+    def _on_segment_preview_requested(self, row: int) -> None:
+        """单行「试听」：只播放该行对应的原始配音文件（不做时间轴渲染，即时播放）。"""
+        if row < 0 or row >= len(self._synthesized_segments):
+            self._show_error("试听失败", "该段尚未生成配音，请先点击「生成配音」。")
+            return
+        audio_path = self._synthesized_segments[row].audio_path
         if not audio_path:
             self._show_error("试听失败", "该段尚未生成配音音频。")
             return
-        self._media_player.setSource(QUrl.fromLocalFile(audio_path))
-        self._media_player.play()
+        self._play_audio_path(audio_path)
 
     # ------------------------------------------------------------------
     # 导出
     # ------------------------------------------------------------------
-    def _build_project_and_plan(self):
-        if not self._video_path or not self._video_info:
-            self._show_error("导出失败", "请先选择视频。")
-            return None, None
+    def _build_timeline_plan(
+        self, action_label: str, *, require_video: bool = True
+    ) -> Optional[TimelinePlan]:
+        """校验分段就绪并构建 `TimelinePlan`（供导出/试听/仅导出音频共用同一套时间轴规划逻辑）。
+
+        `action_label` 用于错误提示的标题（如"导出失败"/"试听失败"），不影响规划结果本身。
+
+        `require_video`：「导出视频」必须有真实视频文件可供混音，因此为 `True`；而
+        「试听」「试听已生成配音」「仅导出音频」都只处理配音本身，不需要用户先选择视频——
+        此时用**最后一段配音的结束时间**作为时间轴总长（不做视频时长截断），传 `False`。
+        """
         if not self._synthesized_segments:
-            self._show_error("导出失败", "请先点击「生成配音」。")
+            self._show_error(action_label, "请先点击「生成配音」。")
+            return None
+        if self._video_path and self._video_info:
+            total_duration = self._video_info.duration
+        elif require_video:
+            self._show_error(action_label, "请先选择视频。")
+            return None
+        else:
+            total_duration = max(
+                seg.start_time + (seg.duration or 0.0) for seg in self._synthesized_segments
+            )
+        try:
+            return build_timeline(self._synthesized_segments, total_duration)
+        except AudioTimelineError as exc:
+            self._show_error(action_label, f"时间轴规划失败：{exc}")
+            return None
+
+    def _confirm_truncation_if_needed(self, plan: TimelinePlan) -> bool:
+        """若 `plan` 存在因截断/重叠丢弃导致的溢出，弹窗请用户确认是否继续（PRODUCT.md A5）。
+
+        无溢出时直接返回 `True`，不弹窗。
+        """
+        if not plan.overflow:
+            return True
+        # 配音总时长超出视频时长（或段落互相重叠）导致部分内容被截断：D2 规定画面时长
+        # 绝不改动，因此只能截断配音，PRODUCT.md A5 要求导出前必须显式提示用户。
+        proceed = QMessageBox.question(
+            self,
+            "配音将被截断",
+            "部分配音内容超出视频时长（或与相邻段重叠），导出时将被截断，"
+            "视频画面时长不会改变。是否继续导出？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return proceed == QMessageBox.StandardButton.Yes
+
+    def _build_project_and_plan(self):
+        """构建「导出视频」所需的 `Project` + `TimelinePlan`。必须已选择视频（用于混音）。"""
+        plan = self._build_timeline_plan("导出失败", require_video=True)
+        if plan is None:
             return None, None
 
         _, mix_mode = _MIX_MODES[self._mix_mode_combo.currentIndex()]
@@ -476,25 +576,9 @@ class MainWindow(QMainWindow):
             mix_mode=mix_mode,
             original_volume=self._volume_slider.value() / 100.0,
         )
-        try:
-            plan = build_timeline(self._synthesized_segments, self._video_info.duration)
-        except AudioTimelineError as exc:
-            self._show_error("导出失败", f"时间轴规划失败：{exc}")
-            return None, None
 
-        if plan.overflow:
-            # 配音总时长超出视频时长（或段落互相重叠）导致部分内容被截断：D2 规定画面时长
-            # 绝不改动，因此只能截断配音，PRODUCT.md A5 要求导出前必须显式提示用户。
-            proceed = QMessageBox.question(
-                self,
-                "配音将被截断",
-                "部分配音内容超出视频时长（或与相邻段重叠），导出时将被截断，"
-                "视频画面时长不会改变。是否继续导出？",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No,
-            )
-            if proceed != QMessageBox.StandardButton.Yes:
-                return None, None
+        if not self._confirm_truncation_if_needed(plan):
+            return None, None
 
         return project, plan
 
@@ -520,8 +604,12 @@ class MainWindow(QMainWindow):
         QMessageBox.information(self, "导出完成", f"已导出到：{result['out_path']}")
 
     def _on_export_audio_only_clicked(self) -> None:
-        _, plan = self._build_project_and_plan()
+        """「仅导出音频」：只处理配音本身，不需要先选择视频（若已选择视频，仍以其时长为准，
+        与「导出视频」保持一致的截断行为）。"""
+        plan = self._build_timeline_plan("导出失败", require_video=False)
         if plan is None:
+            return
+        if not self._confirm_truncation_if_needed(plan):
             return
 
         out_path, _ = QFileDialog.getSaveFileName(
