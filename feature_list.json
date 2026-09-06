@@ -1,7 +1,7 @@
 {
   "$schema_version": "1.0",
   "project": "attach-voice",
-  "description": "AI Voiceover for Existing Videos — machine-readable feature list derived from plan.md Todos.",
+  "description": "AI Voiceover for Existing Videos — machine-readable feature list derived from plan.md Todos, with user-approved SRT workflow F14 and embedded subtitle track F15 extensions.",
   "status_values": [
     "pending",
     "in_progress",
@@ -350,6 +350,65 @@
       "deferred_reason": "用户于 2026-09-05T19:15 明确指示本期不做文档（README）交付，主动挂起。非受阻状态。注意其 depends_on 为 F12，而 F12 亦已被用户挂起为 deferred；恢复时需与 F12 一并由用户决定。",
       "verified_at": null,
       "evidence": null
+    },
+    {
+      "id": "F14",
+      "scope_note": "F14 仅负责独立 SRT 工作流；其不封装字幕轨的验收约束限定于 F14。用户于 2026-09-06 另行批准 F15 可选内嵌字幕轨，不改写 F14 既有验收与证据。",
+      "title": "SRT 文件导入、编辑与导出",
+      "source_todo": null,
+      "depends_on": ["F04", "F07"],
+      "requirements": ["PRODUCT.md D1", "PRODUCT.md D6", "PRODUCT.md#R3", "PRODUCT.md#R14", "ARCHITECTURE.md#4", "ARCHITECTURE.md#5"],
+      "files": ["src/models.py", "src/core/script_parser.py", "src/gui/segment_table.py", "src/gui/main_window.py", "tests/test_script_parser.py", "tests/test_segment_table.py", "tests/test_main_window_srt.py", "scripts/verify_srt_workflow.py", "docs/VERIFICATION.md"],
+      "acceptance": [
+        "主界面可导入 .srt 并把每条字幕载入可编辑的分段表格；已有编辑内容时替换前必须确认，解析失败或取消时现有表格与已生成配音不变",
+        "分段数据独立保存 TTS 实际音频时长 duration 与字幕结束时间 subtitle_end_time；生成或重新生成配音不得覆盖后者",
+        "表格允许编辑字幕起始时间、结束时间和文本；SRT 时间保留毫秒精度，多行文本导入和导出不丢失",
+        "可将当前分段另存为独立 .srt；有 subtitle_end_time 时优先使用它，手工分段缺失时才使用既有合法结束时间推导规则",
+        "配音只按字幕起始时间定位，继续遵守下一段起始时间或视频结束时间截断、间隙补静音的既有规则；字幕结束时间不触发自动变速、截断或补静音",
+        "支持 UTF-8 与 UTF-8 BOM；时间格式错误、结束不晚于开始、空文本、乱序或字幕显示区间重叠时给出条目或行号，且不部分导入",
+        "不烧录字幕、不封装视频字幕轨、不改动视频画面或视频流编码策略"
+      ],
+      "verification": [
+        {"type": "command", "command": "python -m pytest tests/test_script_parser.py tests/test_segment_table.py tests/test_main_window_srt.py -q", "pass_condition": "全部通过，覆盖 SRT 多行文本、毫秒精度、非法输入、导入替换取消、字幕结束时间与 TTS 时长分离"},
+        {"type": "command", "command": "python scripts/verify_srt_workflow.py", "pass_condition": "真实 GUI 导入、编辑并导出 SRT，导出文件的文本与毫秒级起止时间符合预期；重新生成配音后字幕结束时间不变"},
+        {"type": "command", "command": "python -m pytest tests/ -q", "pass_condition": "全部通过，无现有功能回归"},
+        {"type": "command", "command": "python scripts/verify_export.py --all", "pass_condition": "A1/A2/A3/A5 全部通过，确认 SRT 扩展未改变视频导出行为"}
+      ],
+      "status": "verified",
+      "blocked_reason": null,
+      "deferred_reason": null,
+      "verified_at": "2026-09-06T09:14:17+08:00",
+      "evidence": "全部 4 条 verification 于 .venv (Python 3.11.0, Windows) 实际执行并通过：(1) `python -m pytest tests/test_script_parser.py tests/test_segment_table.py tests/test_main_window_srt.py -q` 45 passed (exit 0)，覆盖 SRT 多行文本和毫秒精度、非法输入、导入成功替换/用户拒绝替换/失败不改现状、独立字幕结束时间与 TTS 时长分离、文本/起始时间编辑使旧配音失效而仅改结束时间不失效；(2) `python scripts/verify_srt_workflow.py` PASS (exit 0)，真实 offscreen MainWindow 导入 UTF-8 BOM SRT、确认替换、调用真实 GUI 导出独立 SRT，断言多行文本和 1.234s/3.456s 时间原样保留，并以受控 TTS Provider 调用完整生成编排验证重新生成后 `duration=4.0` 而 `subtitle_end_time=3.456` 不变；(3) `python -m pytest tests/ -q` 168 passed (exit 0)，无回归；(4) `python scripts/verify_export.py --all` exit 0，A1 时长误差 0.000s、A2 最大偏差 0.180s (<0.2s)、A3 3.86s (<15s) 且未重编码视频流、A5 时长误差 0.000s。验证脚本首次直接运行因缺少仓库根路径而报 ModuleNotFoundError，补齐与既有脚本一致的 sys.path 启动配置后重新完整执行全部 4 项并通过。"
+    },
+    {
+      "id": "F15",
+      "title": "视频内嵌字幕轨（MP4 软字幕）",
+      "source_todo": null,
+      "depends_on": ["F06", "F08", "F10", "F14"],
+      "requirements": ["PRODUCT.md D2", "PRODUCT.md D4", "PRODUCT.md D6", "PRODUCT.md D7", "PRODUCT.md#R15", "ARCHITECTURE.md#5", "VERIFICATION.md F15"],
+      "files": ["src/core/script_parser.py", "src/core/video_processor.py", "src/gui/main_window.py", "tests/test_script_parser.py", "tests/test_video_processor.py", "tests/test_main_window_subtitles.py", "scripts/verify_embedded_subtitles.py", "docs/VERIFICATION.md"],
+      "acceptance": [
+        "视频导出提供默认关闭的内嵌字幕选项；关闭时现有导出行为与前置条件不变；F14 独立 SRT 导出、音频试听和音频导出保持不变",
+        "字幕取自当前表格（SRT 导入或手工编辑）的文本和起止时间；缺少结束时间时沿用 F14 推导规则，已有字幕结束时间不随 TTS 实际时长自动调整",
+        "支持字幕与配音一起导出，沿用 replace/overlay、原声音量及既有配音截断规则",
+        "支持不生成配音、仅添加字幕并保留原音轨内容；无音轨的视频不额外生成音轨，不要求 TTS 合成或音色，不应用配音混音参数",
+        "默认输出 MP4，新增一条 mov_text 字幕轨并标记默认显示；由播放器控制显示或关闭，不承诺播放器间默认显示、换行或样式一致",
+        "优先复制视频流，不因添加字幕重编码视频，不改变视频时长或剪辑画面；原有容器不兼容回退与提示规则不变",
+        "字幕封装在 core/video_processor.py 中完成，复用现有异步进度、取消、错误提示和清理；不能静默丢字幕后报告成功",
+        "仅新增一条字幕轨；不做字幕烧录、字体/字号/位置编辑、多语言多字幕轨管理、自动翻译、应用内视频字幕预览或新配置持久化"
+      ],
+      "verification": [
+        {"type": "command", "command": "python -m pytest tests\\test_script_parser.py tests\\test_video_processor.py tests\\test_main_window_subtitles.py -q", "pass_condition": "全部通过，覆盖默认关闭、两种字幕导出场景、当前表格快照、字幕时间与 TTS 解耦、错误和取消；含真实 ffmpeg 场景，不跳过关键用例"},
+        {"type": "command", "command": "python scripts\\verify_embedded_subtitles.py", "pass_condition": "真实 GUI 与 ffmpeg 导出：仅字幕（有/无音轨）、字幕+replace/overlay 均通过；ffprobe 确認 mov_text 与 default 标记；提取字幕文本和时间匹配（误差 <= 0.001s）；视频时长误差 < 0.05s、复制模式视频压缩包载荷一致；两轮不同编辑和超出视频时长场景通过"},
+        {"type": "command", "command": "python -m pytest tests\\ -q", "pass_condition": "全部通过，无现有功能回归，不跳过关键用例"},
+        {"type": "command", "command": "python scripts\\verify_export.py --all", "pass_condition": "A1/A2/A3/A5 全部通过，原有视频导出行为保持不变"},
+        {"type": "manual", "check": "在支持 MP4 mov_text 的播放器中打开 F15 输出文件，选择新增字幕轨，再关闭字幕；记录播放器名称、版本及观察结果", "pass_condition": "字幕可显示并关闭；开关字幕不改变视频画面内容和音频播放；默认显示可能受播放器设置影响，不以跨播放器一致显示为要求"}
+      ],
+      "status": "implemented",
+      "blocked_reason": null,
+      "deferred_reason": null,
+      "verified_at": null,
+      "evidence": "代码已完成；自动化 verification 的前 4 项均实际执行通过：(1) `python -m pytest tests\\\\test_script_parser.py tests\\\\test_video_processor.py tests\\\\test_main_window_subtitles.py -q` 76 passed (exit 0)，含真实 ffmpeg 集成；(2) `python scripts\\\\verify_embedded_subtitles.py` PASS (exit 0)，真实生成有/无原音轨视频，验证仅字幕、字幕+配音导出、mov_text/default 字幕流、多行中文与 1.234s/3.456s 提取时间、原声保留、无音轨保持无音轨、源/输出时长误差 < 0.05s，以及 GUI 默认关闭；(3) `python -m pytest tests\\\\ -q` 175 passed (exit 0)；(4) `python scripts\\\\verify_export.py --all` exit 0，A1/A2/A3/A5 均通过，A3 4.14s 且视频流未重编码。实现中发现字幕+配音命令沿用 -shortest 会把画面截至字幕结束时间（3.456s），已仅在启用字幕时移除 -shortest（旁白时间轴本已与视频等长）；未启用字幕命令保持原样，修复后重新完整执行前 4 项。(5) 人工播放器检查实际生成 `assets/samples/f15_embedded_subtitles_manual.mp4` 并用 Windows Media Player Legacy 打开；加载和播放到结尾均可观察，但在字幕 1-6 秒显示区间截图中未呈现字幕，无法验证关闭动作。本机没有 VLC、ffplay 或 mpv，故没有可用于完成该验收的支持播放器。F15 维持 implemented，不能标记 verified。"
     }
   ]
 }

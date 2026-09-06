@@ -36,17 +36,19 @@ def test_parse_srt_basic_two_segments():
     assert len(segments) == 2
     assert segments[0].text == "第一段文本"
     assert segments[0].start_time == pytest.approx(1.0)
-    assert segments[0].duration == pytest.approx(3.0)
+    assert segments[0].duration is None
+    assert segments[0].subtitle_end_time == pytest.approx(4.0)
     assert segments[1].text == "第二段文本"
     assert segments[1].start_time == pytest.approx(5.5)
-    assert segments[1].duration == pytest.approx(1.75)
+    assert segments[1].duration is None
+    assert segments[1].subtitle_end_time == pytest.approx(7.25)
 
 
-def test_parse_srt_multiline_caption_joined_with_space():
+def test_parse_srt_multiline_caption_is_preserved():
     text = "1\n00:00:00,000 --> 00:00:02,000\n第一行\n第二行\n"
     segments = parse_srt(text)
     assert len(segments) == 1
-    assert segments[0].text == "第一行 第二行"
+    assert segments[0].text == "第一行\n第二行"
 
 
 def test_parse_srt_without_index_line():
@@ -274,6 +276,34 @@ def test_round_trip_srt_is_idempotent_in_time_and_text():
     for a, b in zip(first_pass, second_pass):
         assert a.text == b.text
         assert a.start_time == pytest.approx(b.start_time)
+        assert a.subtitle_end_time == pytest.approx(b.subtitle_end_time)
+
+
+def test_to_srt_prefers_subtitle_end_time_over_tts_duration():
+    segment = Segment(
+        text="字幕显示两秒，配音可更长",
+        start_time=1.0,
+        duration=5.0,
+        subtitle_end_time=3.0,
+    )
+    assert "00:00:01,000 --> 00:00:03,000" in to_srt([segment])
+
+
+def test_to_srt_rejects_invalid_subtitle_order_and_overlap():
+    with pytest.raises(ScriptParseError, match="非递增"):
+        to_srt(
+            [
+                Segment(text="A", start_time=2.0, subtitle_end_time=3.0),
+                Segment(text="B", start_time=1.0, subtitle_end_time=4.0),
+            ]
+        )
+    with pytest.raises(ScriptParseError, match="重叠"):
+        to_srt(
+            [
+                Segment(text="A", start_time=0.0, subtitle_end_time=3.0),
+                Segment(text="B", start_time=2.0, subtitle_end_time=4.0),
+            ]
+        )
 
 
 # ---------------------------------------------------------------------------

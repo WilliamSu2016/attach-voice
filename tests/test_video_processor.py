@@ -16,7 +16,7 @@ import pytest
 
 from src.core import video_processor as vp
 from src.core.audio_timeline import TimelineItem, TimelinePlan
-from src.models import Project
+from src.models import Project, Segment
 from src.utils.ffmpeg_locator import FFmpegNotFoundError
 
 
@@ -271,6 +271,33 @@ def test_build_mux_command_ffmpeg_path_not_hardcoded():
     assert cmd[0] == "C:/custom/located/ffmpeg.exe"
 
 
+def test_build_mux_command_with_subtitles_adds_mov_text_without_reencoding_video():
+    cmd = vp._build_mux_command(
+        "ffmpeg.exe", _project(), _video_info(), "narration.wav", "out.mp4",
+        subtitle_path="subtitles.srt",
+    )
+    assert cmd.count("-i") == 3
+    assert cmd[cmd.index("-c:v") + 1] == "copy"
+    assert cmd[cmd.index("-c:s") + 1] == "mov_text"
+    assert cmd[cmd.index("-disposition:s:0") + 1] == "default"
+    mapped = [cmd[i + 1] for i, arg in enumerate(cmd) if arg == "-map"]
+    assert mapped == ["0:v", "1:a", "2:0"]
+    assert "-shortest" not in cmd
+
+
+def test_build_subtitle_mux_command_copies_video_and_optional_original_audio():
+    cmd = vp._build_subtitle_mux_command("ffmpeg.exe", "in.mp4", "subtitles.srt", "out.mp4")
+    assert cmd[cmd.index("-c:v") + 1] == "copy"
+    assert cmd[cmd.index("-c:a") + 1] == "copy"
+    assert cmd[cmd.index("-c:s") + 1] == "mov_text"
+    assert "0:a?" in cmd
+
+
+def test_export_subtitles_rejects_empty_subtitles(tmp_path):
+    with pytest.raises(vp.VideoProcessorError, match="没有可导出的字幕"):
+        vp.export_subtitles("in.mp4", [], str(tmp_path / "out.mp4"))
+
+
 # ---------------------------------------------------------------------------
 # _looks_like_codec_incompatibility
 # ---------------------------------------------------------------------------
@@ -515,6 +542,57 @@ def test_export_replace_mode_real_ffmpeg(tmp_path, sample_video, real_ffmpeg_pat
     assert out_info.duration == pytest.approx(6.0, abs=0.05)
     assert out_info.has_audio is True
     assert progress_values, "应至少回报过一次进度"
+
+
+@pytest.mark.integration
+def test_export_subtitles_real_ffmpeg_preserves_streams_and_adds_mov_text(
+    tmp_path, sample_video, real_ffmpeg_path
+):
+    subtitles = [Segment("第一行\n第二行", 1.234, subtitle_end_time=3.456)]
+    out_path = str(tmp_path / "subtitled.mp4")
+    vp.export_subtitles(sample_video, subtitles, out_path)
+
+    ffprobe_path = vp._ffprobe_path(real_ffmpeg_path)
+    result = subprocess.run(
+        [ffprobe_path, "-v", "error", "-show_streams", "-show_format", "-of", "json", out_path],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30,
+    )
+    assert result.returncode == 0
+    data = json.loads(result.stdout)
+    subtitle = next(stream for stream in data["streams"] if stream["codec_type"] == "subtitle")
+    assert subtitle["codec_name"] == "mov_text"
+    assert subtitle["disposition"]["default"] == 1
+    assert float(data["format"]["duration"]) == pytest.approx(6.0, abs=0.05)
+
+
+@pytest.mark.integration
+def test_export_with_subtitles_adds_track_to_existing_narration_export(
+    tmp_path, sample_video, real_ffmpeg_path
+):
+    plan = TimelinePlan(
+        items=[TimelineItem(kind="silence", start=0.0, end=6.0)],
+        total_duration=6.0,
+        overflow=False,
+    )
+    out_path = str(tmp_path / "narration_and_subtitles.mp4")
+    vp.export(
+        Project(video_path=sample_video, mix_mode="replace"),
+        plan,
+        out_path,
+        subtitles=[Segment("字幕", 1.0, subtitle_end_time=2.0)],
+    )
+
+    ffprobe_path = vp._ffprobe_path(real_ffmpeg_path)
+    result = subprocess.run(
+        [ffprobe_path, "-v", "error", "-show_streams", "-of", "json", out_path],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30,
+    )
+    streams = json.loads(result.stdout)["streams"]
+    assert any(stream["codec_type"] == "audio" for stream in streams)
+    assert any(
+        stream["codec_type"] == "subtitle" and stream["codec_name"] == "mov_text"
+        for stream in streams
+    )
 
 
 @pytest.mark.integration

@@ -13,6 +13,7 @@ class Segment:
     start_time: float
     audio_path: str | None = None
     duration: float | None = None
+    subtitle_end_time: float | None = None
 
 
 @dataclass

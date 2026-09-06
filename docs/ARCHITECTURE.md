@@ -98,6 +98,7 @@ class Segment:
     start_time: float            # 在视频中的起始秒数
     audio_path: str | None = None    # 合成后的音频文件路径（缓存）
     duration: float | None = None    # 合成后的实际时长
+    subtitle_end_time: float | None = None  # SRT 字幕结束秒数；仅用于字幕保存/导出
 
 @dataclass
 class Project:
@@ -111,6 +112,10 @@ class Project:
 ```
 
 **约束**：数据模型为纯数据容器，不含 I/O、不含 ffmpeg 调用、不含 PyQt 类型。
+
+`duration` 只表示 TTS 合成后的实际音频时长，供音频时间轴计算使用；`subtitle_end_time`
+只表示从 SRT 导入或在表格中编辑得到的字幕显示结束时间，供 SRT 导出及 F15 内嵌字幕使用。两者不得复用、
+互相覆盖或相互推导。
 
 ---
 
@@ -133,8 +138,16 @@ class TTSProvider(ABC):
 - `parse_srt(text) -> list[Segment]`
 - `parse_simple(text) -> list[Segment]`（`[mm:ss] 文本` 与 `[hh:mm:ss]`）
 - `to_srt(segments) -> str`
-- 校验：时间格式非法、起始时间非递增、段落重叠 → 抛出带行号的明确异常。
+- `parse_srt` 将 SRT 的结束时间写入 `Segment.subtitle_end_time`，不得写入 `duration`。
+- `to_srt` 优先使用 `subtitle_end_time`；对手工创建且未设置该字段的分段，才按既有回退规则推导合法显示结束时间。
+- 校验：时间格式非法、结束时间不晚于起始时间、起始时间非递增、字幕显示区间重叠 → 抛出带行号的明确异常。
 - **纯函数，无 I/O，无网络**（可直接单测）。
+
+### `gui/segment_table.py` 与 `gui/main_window.py`
+- 主界面提供 `.srt` 导入和独立 `.srt` 导出入口；导入成功后将分段写入编辑表格。
+- 分段表格展示并允许编辑字幕起始时间、结束时间和文本；手工创建的分段可没有字幕结束时间。
+- 导入会替换当前表格时，若已有用户编辑内容必须先确认；解析失败、用户取消或确认拒绝时不得改变当前表格及已生成配音。
+- 编辑文本或起始时间后，现有配音视为过期，不能作为新分段的试听或导出结果；仅编辑字幕结束时间不影响已生成音频。
 
 ### `core/audio_timeline.py`
 - `build_timeline(segments, video_duration) -> TimelinePlan`
@@ -148,6 +161,24 @@ class TTSProvider(ABC):
 - 混音：`replace` 丢弃原音轨；`overlay` 用 `amix` + `volume=original_volume`。
 - 进度：解析 ffmpeg stderr 的 `time=` 字段。
 - 取消：终止子进程并清理临时文件。
+
+### F15 视频内嵌字幕的扩展契约（待实现）
+
+- 保持现有 `export` 调用方默认行为不变；字幕选项必须显式启用。字幕数据取自当前表格快照，
+  不得仅依赖 `_synthesized_segments`：未生成配音及只编辑字幕结束时间的场景同样必须正确。
+- 字幕时间与文本规范化复用 `core/script_parser.py` 的 F14 规则；GUI 只采集选项和显示错误，
+  不复制结束时间推导、时间校验或 ffmpeg 参数算法。
+- GUI 区分「配音与字幕一起导出」与「仅添加字幕、保留原声」。前者复用既有配音时间轴和
+  replace/overlay 参数；后者不要求配音结果、音色或 TTS 调用，不构造虚假配音/静音轨来绕过前置条件。
+- ffmpeg 的字幕输入、临时文件、显式流映射与封装均由 `core/video_processor.py` 负责，
+  路径仍通过 `utils/ffmpeg_locator.py` 获取。默认 MP4 使用 `-c:s mov_text`，新增一条字幕轨并设置
+  default disposition；不得使用字幕烧录滤镜，不因添加字幕切换视频编码策略。
+- 仅添加字幕时保留原音轨内容；兼容 MP4 时优先复制音轨，不兼容时可转为 AAC，不能借此静默
+  替换、混音或丢弃原声。没有原音轨时输出仍无音轨。
+- 字幕不能延长视频输出或导致视频提前结束；时间边界处理不得回写修改当前表格或独立 SRT。
+- 导出复用 `WorkerThread` 的进度、取消、失败提示和临时文件清理机制；禁止静默丢弃字幕并报告成功。
+- 不增加 QSettings 持久化键、字幕样式编辑器或应用内视频字幕预览。播放器负责字幕渲染；
+  default disposition 仅是标记，不是“播放器一定自动显示”的保证。
 
 ### `utils/ffmpeg_locator.py`
 - 查找顺序：应用目录 `bin/` → `PATH` → 用户配置路径。

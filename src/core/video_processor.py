@@ -25,7 +25,8 @@ from pathlib import Path
 from typing import Callable, List, Optional
 
 from src.core.audio_timeline import TimelinePlan
-from src.models import Project
+from src.core.script_parser import ScriptParseError, to_srt
+from src.models import Project, Segment
 from src.utils.ffmpeg_locator import FFmpegNotFoundError, find_ffmpeg, verify_ffmpeg
 
 # 音频中间轨渲染时使用的采样参数（44.1kHz 立体声，兼容绝大多数容器与播放器）
@@ -299,9 +300,12 @@ def _build_mux_command(
     narration_path: str,
     out_path: str,
     reencode_video: bool = False,
+    subtitle_path: Optional[str] = None,
 ) -> list[str]:
     """构造最终「原视频 + 配音轨」混音导出命令。"""
     cmd = [ffmpeg_path, "-y", "-i", project.video_path, "-i", narration_path]
+    if subtitle_path is not None:
+        cmd += ["-i", subtitle_path]
 
     video_codec_args = ["-c:v", "libx264"] if reencode_video else ["-c:v", "copy"]
 
@@ -320,8 +324,62 @@ def _build_mux_command(
         cmd += ["-map", "0:v", "-map", "1:a"]
 
     cmd += video_codec_args
-    cmd += ["-c:a", "aac", "-shortest", str(out_path)]
+    cmd += ["-c:a", "aac"]
+    if subtitle_path is not None:
+        # 字幕往往比视频短；若使用 -shortest，ffmpeg 会把字幕结束误作输出终点并截断画面。
+        # narration 时间轴已与视频等长，因此字幕导出不需要 -shortest。
+        cmd += ["-map", "2:0", "-c:s", "mov_text", "-disposition:s:0", "default"]
+    else:
+        cmd += ["-shortest"]
+    cmd += [str(out_path)]
     return cmd
+
+
+def _build_subtitle_mux_command(
+    ffmpeg_path: str, video_path: str, subtitle_path: str, out_path: str
+) -> list[str]:
+    """将 SRT 封装为 MP4 mov_text 软字幕，不重编码视频或原音轨。"""
+    return [
+        ffmpeg_path, "-y", "-i", video_path, "-i", subtitle_path,
+        "-map", "0:v", "-map", "0:a?", "-map", "1:0",
+        "-c:v", "copy", "-c:a", "copy", "-c:s", "mov_text",
+        "-disposition:s:0", "default", out_path,
+    ]
+
+
+def export_subtitles(
+    video_path: str,
+    subtitles: List[Segment],
+    out_path: str,
+    on_progress: Optional[Callable[[float], None]] = None,
+    cancel_token: Optional[CancelToken] = None,
+    user_configured_ffmpeg_path: Optional[str] = None,
+) -> None:
+    """只向视频封装一条 mov_text 字幕轨，完整保留原视频和原音轨。"""
+    if not subtitles:
+        raise VideoProcessorError("没有可导出的字幕。")
+    if cancel_token is not None and cancel_token.is_cancelled():
+        raise ExportCancelledError("导出已被用户取消。")
+
+    try:
+        subtitle_text = to_srt(subtitles)
+    except ScriptParseError as exc:
+        raise VideoProcessorError(f"字幕无效：{exc}") from exc
+
+    ffmpeg_path = _ffmpeg_path(user_configured_ffmpeg_path)
+    video_info = probe(video_path, user_configured_ffmpeg_path)
+    with tempfile.TemporaryDirectory(prefix="attach-voice-subtitles-") as tmp_dir:
+        subtitle_path = str(Path(tmp_dir) / "subtitles.srt")
+        Path(subtitle_path).write_text(subtitle_text, encoding="utf-8")
+        stderr_text = _run_ffmpeg_with_progress(
+            _build_subtitle_mux_command(ffmpeg_path, video_path, subtitle_path, out_path),
+            video_info.duration,
+            on_progress,
+            cancel_token,
+            [subtitle_path, out_path],
+        )
+        if not Path(out_path).is_file() or Path(out_path).stat().st_size == 0:
+            raise ExportFailedError(f"内嵌字幕导出失败：{stderr_text.strip()[-2000:]}")
 
 
 _REENCODE_TRIGGER_PATTERNS = (
@@ -395,6 +453,7 @@ def export(
     cancel_token: Optional[CancelToken] = None,
     on_reencode_fallback: Optional[Callable[[str], None]] = None,
     user_configured_ffmpeg_path: Optional[str] = None,
+    subtitles: Optional[List[Segment]] = None,
 ) -> None:
     """按 `timeline` 规划渲染配音轨，与原视频混音导出到 `out_path`。
 
@@ -413,6 +472,17 @@ def export(
     with tempfile.TemporaryDirectory(prefix="attach-voice-export-") as tmp_dir:
         narration_path = str(Path(tmp_dir) / "narration.wav")
         cleanup_paths = [narration_path]
+        subtitle_path: Optional[str] = None
+        if subtitles is not None:
+            if not subtitles:
+                raise VideoProcessorError("没有可导出的字幕。")
+            try:
+                subtitle_text = to_srt(subtitles)
+            except ScriptParseError as exc:
+                raise VideoProcessorError(f"字幕无效：{exc}") from exc
+            subtitle_path = str(Path(tmp_dir) / "subtitles.srt")
+            Path(subtitle_path).write_text(subtitle_text, encoding="utf-8")
+            cleanup_paths.append(subtitle_path)
 
         if cancel_token is not None and cancel_token.is_cancelled():
             raise ExportCancelledError("导出已被用户取消。")
@@ -426,7 +496,8 @@ def export(
             raise ExportCancelledError("导出已被用户取消。")
 
         cmd = _build_mux_command(
-            ffmpeg_path, project, video_info, narration_path, out_path, reencode_video=False
+            ffmpeg_path, project, video_info, narration_path, out_path,
+            reencode_video=False, subtitle_path=subtitle_path,
         )
         stderr_text = _run_ffmpeg_with_progress(
             cmd, video_info.duration, on_progress, cancel_token, cleanup_paths
@@ -441,7 +512,8 @@ def export(
                         "检测到容器/编码不兼容，正在重新编码视频，耗时较长，请耐心等待。"
                     )
                 cmd = _build_mux_command(
-                    ffmpeg_path, project, video_info, narration_path, out_path, reencode_video=True
+                    ffmpeg_path, project, video_info, narration_path, out_path,
+                    reencode_video=True, subtitle_path=subtitle_path,
                 )
                 stderr_text = _run_ffmpeg_with_progress(
                     cmd, video_info.duration, on_progress, cancel_token, cleanup_paths

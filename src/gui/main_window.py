@@ -30,6 +30,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QCheckBox,
     QSlider,
     QVBoxLayout,
     QWidget,
@@ -38,7 +39,7 @@ from PyQt6.QtCore import Qt
 
 from src.core.audio_timeline import AudioTimelineError, TimelinePlan, build_timeline
 from src.core.edge_tts_provider import EdgeTTSProvider
-from src.core.script_parser import ScriptParseError
+from src.core.script_parser import ScriptParseError, parse_srt, to_srt
 from src.core.tts_provider import TTSNetworkError, TTSProvider
 from src.core.video_processor import (
     ExportCancelledError,
@@ -49,6 +50,7 @@ from src.core.video_processor import (
     VideoProcessorError,
     export as video_export,
     export_audio_only,
+    export_subtitles,
     probe,
 )
 from src.gui.segment_table import SegmentTable
@@ -94,7 +96,13 @@ def _generate_narration(
         out_path = str(run_dir / f"seg{i}.mp3")
         duration = tts_provider.synthesize(seg.text, voice, rate, pitch, out_path)
         synthesized.append(
-            Segment(text=seg.text, start_time=seg.start_time, audio_path=out_path, duration=duration)
+            Segment(
+                text=seg.text,
+                start_time=seg.start_time,
+                audio_path=out_path,
+                duration=duration,
+                subtitle_end_time=seg.subtitle_end_time,
+            )
         )
         on_progress((i + 1) / total if total else 1.0)
     return synthesized
@@ -106,6 +114,7 @@ def _export_video_task(
     out_path: str,
     on_progress: Callable[[float], None],
     cancel_token: CancelToken,
+    subtitles: Optional[List[Segment]] = None,
 ) -> dict:
     """包装 `video_processor.export()`：`on_reencode_fallback` 在后台线程被调用，
     直接操作 Qt 控件不安全，因此先收集提示文案，导出完成后随 `finished` 信号一并
@@ -113,15 +122,17 @@ def _export_video_task(
     任务结束时显示，不影响 D4 行为本身）。
     """
     reencode_messages: List[str] = []
-    video_export(
-        project,
-        plan,
-        out_path,
-        on_progress=on_progress,
-        cancel_token=cancel_token,
-        on_reencode_fallback=reencode_messages.append,
-    )
+    video_export(project, plan, out_path, on_progress=on_progress, cancel_token=cancel_token,
+                 on_reencode_fallback=reencode_messages.append, subtitles=subtitles)
     return {"out_path": out_path, "reencode_messages": reencode_messages}
+
+
+def _export_subtitles_task(
+    video_path: str, subtitles: List[Segment], out_path: str,
+    on_progress: Callable[[float], None], cancel_token: CancelToken,
+) -> str:
+    export_subtitles(video_path, subtitles, out_path, on_progress, cancel_token)
+    return out_path
 
 
 def _export_audio_only_task(
@@ -174,11 +185,16 @@ class MainWindow(QMainWindow):
         # 分段表格
         self._segment_table = SegmentTable(self)
         self._segment_table.preview_row_requested.connect(self._on_segment_preview_requested)
+        self._segment_table.segments_edited.connect(self._on_segments_edited)
         root_layout.addWidget(self._segment_table, stretch=1)
 
         table_btn_row = QHBoxLayout()
         self._add_row_btn = QPushButton("添加分段", self)
         self._add_row_btn.clicked.connect(lambda: self._segment_table.add_row())
+        self._import_srt_btn = QPushButton("导入 SRT", self)
+        self._import_srt_btn.clicked.connect(self._on_import_srt_clicked)
+        self._export_srt_btn = QPushButton("导出 SRT", self)
+        self._export_srt_btn.clicked.connect(self._on_export_srt_clicked)
         self._preview_btn = QPushButton("试听已生成配音", self)
         self._preview_btn.setToolTip(
             "按时间轴渲染完整配音轨（含段间静音间隔、超长截断）后播放，效果与「仅导出音频」/"
@@ -186,6 +202,8 @@ class MainWindow(QMainWindow):
         )
         self._preview_btn.clicked.connect(self._on_preview_clicked)
         table_btn_row.addWidget(self._add_row_btn)
+        table_btn_row.addWidget(self._import_srt_btn)
+        table_btn_row.addWidget(self._export_srt_btn)
         table_btn_row.addWidget(self._preview_btn)
         root_layout.addLayout(table_btn_row)
 
@@ -232,10 +250,13 @@ class MainWindow(QMainWindow):
 
         # 导出按钮
         export_row = QHBoxLayout()
+        self._embed_subtitles_checkbox = QCheckBox("内嵌字幕", self)
+        self._embed_subtitles_checkbox.setToolTip("封装一条可由播放器开关的 MP4 字幕轨")
         self._export_btn = QPushButton("导出", self)
         self._export_btn.clicked.connect(self._on_export_clicked)
         self._export_audio_btn = QPushButton("仅导出音频", self)
         self._export_audio_btn.clicked.connect(self._on_export_audio_only_clicked)
+        export_row.addWidget(self._embed_subtitles_checkbox)
         export_row.addWidget(self._export_btn)
         export_row.addWidget(self._export_audio_btn)
         root_layout.addLayout(export_row)
@@ -356,9 +377,12 @@ class MainWindow(QMainWindow):
         for widget in (
             self._select_video_btn,
             self._add_row_btn,
+            self._import_srt_btn,
+            self._export_srt_btn,
             self._preview_btn,
             self._generate_btn,
             self._export_btn,
+            self._embed_subtitles_checkbox,
             self._export_audio_btn,
             self._segment_table,
             self._voice_selector,
@@ -412,6 +436,65 @@ class MainWindow(QMainWindow):
             self._show_error("导出失败", str(exc))
         else:
             self._show_error("任务失败", str(exc))
+
+    # ------------------------------------------------------------------
+    # SRT 导入与导出
+    # ------------------------------------------------------------------
+    def _on_import_srt_clicked(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "导入 SRT 字幕", "", "SRT 字幕 (*.srt)")
+        if not path:
+            return
+
+        try:
+            text = Path(path).read_text(encoding="utf-8-sig")
+            segments = parse_srt(text)
+        except UnicodeDecodeError:
+            self._show_error("导入 SRT 失败", "字幕文件必须使用 UTF-8 或 UTF-8 BOM 编码。")
+            return
+        except (OSError, ScriptParseError) as exc:
+            self._show_error("导入 SRT 失败", str(exc))
+            return
+
+        if self._segment_table.rowCount() > 0:
+            replace = QMessageBox.question(
+                self,
+                "替换当前脚本",
+                "导入 SRT 将替换当前分段脚本，是否继续？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if replace != QMessageBox.StandardButton.Yes:
+                return
+
+        self._segment_table.set_segments(segments)
+        self._synthesized_segments = []
+        self._update_duration_comparison()
+
+    def _on_export_srt_clicked(self) -> None:
+        try:
+            srt_text = to_srt(self._segment_table.get_segments())
+        except ScriptParseError as exc:
+            self._show_error("导出 SRT 失败", str(exc))
+            return
+
+        path, _ = QFileDialog.getSaveFileName(
+            self, "导出 SRT 字幕", self._settings.output_dir(), "SRT 字幕 (*.srt)"
+        )
+        if not path:
+            return
+        try:
+            Path(path).write_text(srt_text, encoding="utf-8")
+        except OSError as exc:
+            self._show_error("导出 SRT 失败", str(exc))
+            return
+        self._settings.set_output_dir(str(Path(path).parent))
+        self._show_info("导出完成", f"已导出到：{path}")
+
+    def _on_segments_edited(self, affects_audio: bool) -> None:
+        """文本或起始时间变化会使旧配音不再对应表格；仅字幕结束时间变化不影响音频。"""
+        if affects_audio and self._synthesized_segments:
+            self._synthesized_segments = []
+            self._update_duration_comparison()
 
     # ------------------------------------------------------------------
     # 生成配音
@@ -583,6 +666,30 @@ class MainWindow(QMainWindow):
         return project, plan
 
     def _on_export_clicked(self) -> None:
+        subtitles = self._segment_table.get_segments()
+        if self._embed_subtitles_checkbox.isChecked() and not subtitles:
+            self._show_error("导出失败", "请先添加字幕分段。")
+            return
+        if self._embed_subtitles_checkbox.isChecked() and not self._synthesized_segments:
+            if not self._video_path or not self._video_info:
+                self._show_error("导出失败", "请先选择视频。")
+                return
+            try:
+                to_srt(subtitles)
+            except ScriptParseError as exc:
+                self._show_error("导出失败", str(exc))
+                return
+            out_path, _ = QFileDialog.getSaveFileName(
+                self, "导出视频（内嵌字幕）", self._settings.output_dir(), "MP4 视频 (*.mp4)"
+            )
+            if not out_path:
+                return
+            self._start_worker(
+                WorkerThread(_export_subtitles_task, self._video_path, subtitles, out_path),
+                self._on_export_subtitles_finished,
+            )
+            return
+
         project, plan = self._build_project_and_plan()
         if project is None or plan is None:
             return
@@ -593,8 +700,16 @@ class MainWindow(QMainWindow):
         if not out_path:
             return
 
-        worker = WorkerThread(_export_video_task, project, plan, out_path)
+        worker = WorkerThread(
+            _export_video_task, project, plan, out_path,
+            subtitles=subtitles if self._embed_subtitles_checkbox.isChecked() else None,
+        )
         self._start_worker(worker, self._on_export_finished)
+
+    def _on_export_subtitles_finished(self, out_path: str) -> None:
+        self._progress_bar.setValue(100)
+        self._settings.set_output_dir(str(Path(out_path).parent))
+        QMessageBox.information(self, "导出完成", f"已导出到：{out_path}")
 
     def _on_export_finished(self, result: dict) -> None:
         self._progress_bar.setValue(100)

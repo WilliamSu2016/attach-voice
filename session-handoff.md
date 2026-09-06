@@ -9,30 +9,36 @@
 
 | 项 | 值 |
 |---|---|
-| 最后更新 | 2026-09-05T22:16:00+08:00 |
-| 会话编号 | S016 |
-| 会话目标 | （承 S014/S015）修复缺陷"重新生成配音后试听仍放旧配音"；补齐 PRODUCT.md R6「每段独立试听」（逐行试听按钮 + 全局按时间轴渲染播放）；（本段）按用户指示，取消「试听」「试听已生成配音」「仅导出音频」必须先选视频的前提，仅「导出视频」保留该前提 |
-| 会话结果 | **本期范围内完成，四处 GUI 交互问题已处理**。F11 `verified`；F12/F13 `deferred`（用户指示）。缺陷修复 1：重新生成配音后试听放旧配音（O16/O17/O18）。缺陷修复 2：逐段独立试听按钮 + 全局按序连续播放。缺陷修复 3：全局试听改为按时间轴渲染播放。缺陷修复 4（本段）：`_build_timeline_plan()` 新增 `require_video` 参数，未选视频时改用最后一段配音结束时间作为时间轴总长；`_on_export_audio_only_clicked`/`_on_preview_clicked` 均传 `require_video=False`，仅 `_build_project_and_plan`（供「导出视频」使用）仍传 `True`。`tests/test_segment_preview_controls.py` 更新为 8 条用例，`scripts/verify_segment_preview_controls.py` 新增"清空视频后仍能正常渲染播放"场景，共 10/10 PASS。全量测试 **158 passed**。**未改变任何 feature 的状态**，均为对已 `verified` 的 F07 试听/导出交互的缺陷修复/需求补齐。新增流程教训 **O19**（负向对照严禁用 `git checkout --` 撤销，见下）。 |
+| 最后更新 | 2026-09-06T10:05:27+08:00 |
+| 会话编号 | S017 |
+| 会话目标 | 实现 F15 视频内嵌字幕轨，不改变现有功能且不扩展范围 |
+| 会话结果 | **F15 已实现，状态 implemented（非 verified）。** 默认关闭的 MP4 mov_text 软字幕、仅字幕保留原声与字幕+既有配音路径均已完成。76 项定向、175 项全量、嵌入字幕端到端脚本及 A1/A2/A3/A5 均通过；Windows Media Player 实际打开时未显示字幕，本机无其他支持播放器可继续验证，因此显示/关闭人工验收未通过，严格不提前标 verified。 |
+| 上次会话结果 | **本期范围内完成，四处 GUI 交互问题已处理**。F11 `verified`；F12/F13 `deferred`（用户指示）。缺陷修复 1：重新生成配音后试听放旧配音（O16/O17/O18）。缺陷修复 2：逐段独立试听按钮 + 全局按序连续播放。缺陷修复 3：全局试听改为按时间轴渲染播放。缺陷修复 4：`_build_timeline_plan()` 新增 `require_video` 参数，未选视频时改用最后一段配音结束时间作为时间轴总长；`_on_export_audio_only_clicked`/`_on_preview_clicked` 均传 `require_video=False`，仅 `_build_project_and_plan`（供「导出视频」使用）仍传 `True`。`tests/test_segment_preview_controls.py` 更新为 8 条用例，`scripts/verify_segment_preview_controls.py` 新增"清空视频后仍能正常渲染播放"场景，共 10/10 PASS。全量测试 **158 passed**。 |
 
 ---
 
 ## 当前项目状态
 
-**阶段**：`本期范围内完成`（`AGENTS.md` §6.4）
+**阶段**：`F15 已实现，待人工验证`
 
 | 指标 | 值 |
 |---|---|
-| 总 feature 数 | 13 |
-| verified | **11**（F01–F11） |
-| implemented（待验证） | 0 |
+| 总 feature 数 | 15 |
+| verified | **12**（F01–F11、F14） |
+| implemented（待验证） | 1（F15 视频内嵌字幕轨） |
 | in_progress | 0 |
 | blocked | 0 |
 | **deferred** | **2（F12 PyInstaller 打包、F13 文档）— 用户主动挂起** |
 | pending | 0 |
 
-**完成判定**：按 `AGENTS.md` §6.4，存在用户挂起的 `deferred` feature 时，项目状态记为「本期范围内完成」——
-全部**非 `deferred`** 的 feature（F01–F11）均为 `verified`，且 PRODUCT.md 的 A1–A5 全部有执行记录。
-F12/F13 **不计入完成**，也不得被当作已完成对待。
+**完成判定**：F01–F11、F14 仍为 `verified`，F15 为 `implemented`，扩展后的范围尚未完成。
+F12/F13 仍为用户主动挂起的 `deferred`，不计入完成。原有 A1–A5 证据不代表 F15 已验证。
+
+**F15 人工验收阻碍**：已生成 `assets/samples/f15_embedded_subtitles_manual.mp4` 并实际在 Windows
+Media Player Legacy 打开：播放至结尾及字幕显示区间（第 3 秒）均已截图；后者未显示字幕，因此
+不能确认显示或关闭。系统未安装 VLC，且 `ffplay`/`mpv` 不可用。待用户用支持 MP4 `mov_text`
+软字幕的播放器验证“显示 + 关闭”后，才可将 F15 从 `implemented` 改为 `verified`；agent 不得以
+ffprobe 的字幕轨证据替代这条人工观察。
 
 ### 挂起清单（deferred）
 
@@ -58,7 +64,15 @@ F12/F13 **不计入完成**，也不得被当作已完成对待。
 
 ---
 
-## 本次会话完成的工作
+## 本轮新增需求记录
+
+用户于 2026-09-06T10:02:50+08:00 确认内嵌字幕收敛范围并要求只写文档。
+F15 依赖 F06/F08/F10/F14（均为 verified），不依赖被挂起的 F12/F13。
+本轮更新 D7/R15、F15 架构契约及验证计划；没有执行或声称通过任何 F15 功能验证。
+F15 新脚本/测试路径只是后续计划，目前未创建。F14 的“不封装字幕轨”是其原有功能范围，
+不限制用户另行批准的 F15；原有 F14 验收条目不被改写。
+
+## 历史工作摘要（非本轮执行记录）
 
 1. **F11 实现与验证**：
    - 扩展 `scripts/verify_export.py`：新增 `run_a2()`（复用 `verify_timeline_offsets.main()` 的真实合成 + 能量起点检测）与 `run_a5()`（核心层构造超长配音 overflow 场景，断言导出后视频时长仍等于源时长）；`--all` 由「A1+A3」扩展为「A1+A2+A3+A5」，与 verification 条目 2 的 pass_condition 对齐。
@@ -197,13 +211,14 @@ F12/F13 **不计入完成**，也不得被当作已完成对待。
 
 ## 下一个会话应该做什么
 
-### 结论：**没有可以自主开工的 feature**
+### 结论：**F15 需求已记录，等待用户要求开始实现**
 
-- F01–F11 全部 `verified`。
+- 本轮仅授权文档更新，不得自动开始 F15。用户要求实现后，F15 是依赖已满足的最小编号 pending
+  feature；先置为 in_progress，再按其验收范围实现并逐项验证。
+- F01–F11、F14 均为 `verified`。F14 的关键语义已落实：`subtitle_end_time` 与 TTS
+  `duration` 分离；字幕结束时间仅用于 SRT 保存/导出，不能限制配音时间轴。
 - F12、F13 是 `deferred`（**用户主动挂起**）——按 `AGENTS.md` §6.1、§7，**只有用户可以解除挂起**。
   **不要**因为"就剩两个 feature 了"就自行把它们改回 `pending` 并开工。
-- 因此若用户没有新的指示，正确做法是：向用户汇报当前状态（本期范围内完成 + 两个挂起项），
-  并询问下一步意图，而不是自行找活干。
 
 ### 若用户要求恢复 F12 / F13
 

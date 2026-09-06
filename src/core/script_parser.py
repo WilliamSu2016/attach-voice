@@ -4,10 +4,9 @@
 校验规则：时间格式非法、起始时间非递增、段落重叠时抛出 ScriptParseError，
 异常消息包含行号，便于用户定位问题（PRODUCT.md#R3、D1）。
 
-设计说明：`Segment`（见 src/models.py）没有独立的 end_time 字段——`duration` 字段
-语义上是「合成后的实际时长」，这里复用它在解析 .srt 时记录原始字幕的显示时长
-（end - start），从而使 `to_srt(parse_srt(x))` 能够精确还原原始时间轴，满足幂等要求；
-`parse_simple` 得到的段落没有显式结束时间，`duration` 保持为 None。
+设计说明：SRT 的显示结束时间存入 `Segment.subtitle_end_time`；`duration` 始终只表示
+TTS 合成后的实际音频时长。`parse_simple` 得到的段落没有显式结束时间，两个字段均保持
+为 None。
 """
 from __future__ import annotations
 
@@ -141,7 +140,7 @@ def parse_srt(text: str) -> List[Segment]:
         _check_monotonic_and_overlap(time_line_no, start, prev_start, prev_end)
 
         segments.append(
-            Segment(text=" ".join(text_lines), start_time=start, duration=end - start)
+            Segment(text="\n".join(text_lines), start_time=start, subtitle_end_time=end)
         )
         prev_start, prev_end = start, end
 
@@ -187,10 +186,14 @@ def to_srt(segments: List[Segment]) -> str:
     if not segments:
         return ""
 
+    _validate_srt_segments(segments)
+
     blocks: List[str] = []
     for idx, seg in enumerate(segments):
         start = seg.start_time
-        if seg.duration is not None:
+        if seg.subtitle_end_time is not None:
+            end = seg.subtitle_end_time
+        elif seg.duration is not None:
             end = start + seg.duration
         elif idx + 1 < len(segments):
             end = min(start + _DEFAULT_DISPLAY_DURATION, segments[idx + 1].start_time)
@@ -206,6 +209,28 @@ def to_srt(segments: List[Segment]) -> str:
         )
 
     return "\n".join(blocks) + "\n"
+
+
+def _validate_srt_segments(segments: List[Segment]) -> None:
+    """校验 SRT 可表示的起止时间与顺序，错误使用表格行号（从 1 开始）。"""
+    prev_start: Optional[float] = None
+    prev_end: Optional[float] = None
+    for row_no, seg in enumerate(segments, start=1):
+        if not seg.text or not seg.text.strip():
+            raise ScriptParseError(f"第 {row_no} 行：字幕文本缺失")
+        if seg.start_time < 0:
+            raise ScriptParseError(f"第 {row_no} 行：起始时间不能为负数（{seg.start_time}s）")
+        if prev_start is not None and seg.start_time < prev_start:
+            raise ScriptParseError(f"第 {row_no} 行：起始时间非递增")
+        if seg.subtitle_end_time is not None:
+            if seg.subtitle_end_time <= seg.start_time:
+                raise ScriptParseError(f"第 {row_no} 行：结束时间必须晚于起始时间")
+            if prev_end is not None and seg.start_time < prev_end:
+                raise ScriptParseError(f"第 {row_no} 行：段落与前一段重叠")
+            prev_end = seg.subtitle_end_time
+        else:
+            prev_end = None
+        prev_start = seg.start_time
 
 
 def validate_segments(segments: List[Segment]) -> None:

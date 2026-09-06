@@ -52,8 +52,8 @@ def test_segment_table_has_preview_button_left_of_remove(app):
     table = SegmentTable()
     table.add_row(0.0, "文本")
 
-    preview_btn = table.cellWidget(0, 2)
-    remove_btn = table.cellWidget(0, 3)
+    preview_btn = table.cellWidget(0, 3)
+    remove_btn = table.cellWidget(0, 4)
 
     assert isinstance(preview_btn, QPushButton) and preview_btn.text() == "试听"
     assert isinstance(remove_btn, QPushButton) and remove_btn.text() == "删除"
@@ -70,8 +70,8 @@ def test_segment_table_preview_button_emits_current_row_index(app):
     received = []
     table.preview_row_requested.connect(received.append)
 
-    table.cellWidget(0, 2).click()
-    table.cellWidget(1, 2).click()
+    table.cellWidget(0, 3).click()
+    table.cellWidget(1, 3).click()
 
     assert received == [0, 1]
 

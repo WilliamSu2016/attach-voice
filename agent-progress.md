@@ -5,6 +5,105 @@
 
 ---
 
+### F15 视频内嵌字幕轨 — implemented @ 2026-09-06T10:05:27+08:00
+
+**实现范围**：仅 F15。`src/core/video_processor.py` 增加 `export_subtitles()`（仅字幕）与
+`export(..., subtitles=...)`（字幕+既有配音）两条显式路径：都将当前字幕快照经 F14
+`to_srt()` 规则写入临时 SRT，以 `-c:s mov_text -disposition:s:0 default` 映射为一条 MP4
+软字幕轨。仅字幕路径复制视频和可选原音轨，不触发 TTS、音色、混音或虚假音轨；字幕+配音路径
+复用原有 replace/overlay、时间轴、进度、取消和回退机制。GUI 新增默认关闭的「内嵌字幕」
+复选框；未勾选时保留原导出分支，勾选且没有已生成配音时走纯字幕路径。
+
+修复一个 F15 直接引入的时长问题：字幕+配音时若沿用既有 `-shortest`，ffmpeg 会在字幕流结束
+（实测 3.456s）时截断输出画面。启用字幕时去掉 `-shortest`，因为原有 narration `TimelinePlan`
+已等长于视频；未启用字幕的命令保持原样。未实现字幕烧录、样式编辑、多字幕轨、翻译、应用内
+预览或设置持久化。新增 `tests/test_main_window_subtitles.py`、核心单元/集成覆盖及
+`scripts/verify_embedded_subtitles.py`。
+
+| # | 类型 | 命令 / 检查 | 结果 |
+|---|---|---|---|
+| 1 | command | `python -m pytest tests/test_script_parser.py tests/test_video_processor.py tests/test_main_window_subtitles.py -q` | PASS — 76 passed in 16.09s（含真实 ffmpeg 集成，exit 0） |
+| 2 | command | `python scripts/verify_embedded_subtitles.py` | PASS — 真实 GUI 默认值 + 真实 ffmpeg：仅字幕（有/无音轨）、字幕+配音、mov_text/default、提取文本/毫秒时间、音轨保留、输出时长全部通过（exit 0） |
+| 3 | command | `python -m pytest tests/ -q` | PASS — 175 passed in 42.92s（exit 0） |
+| 4 | command | `python scripts/verify_export.py --all` | PASS — A1/A2/A3/A5；时长误差 0.000s、最大起点偏差 0.180s、10 分钟导出 4.14s 且未重编码视频流（exit 0） |
+| 5 | command | 核心层 AST import 检查 | PASS — `video_processor.py` 无 PyQt6 import（exit 0） |
+| 6 | manual | 在支持 MP4 mov_text 的播放器中打开输出、选择并关闭字幕 | **未执行** — 需要真实播放器界面的视觉观察，自动化 ffprobe/提取验证不能替代；F15 保持 `implemented` |
+
+F15 所有自动验证已通过，但 `feature_list.json` 的人工验证项尚未实际执行，严格按状态规则不得
+标记 `verified`。待用户在支持 MP4 `mov_text` 的播放器中确认字幕可显示及关闭后，才可补记录并
+决定是否置为 verified。
+
+**播放器人工验证尝试（2026-09-06T10:10:06+08:00）**：生成
+`assets/samples/f15_embedded_subtitles_manual.mp4`（字幕显示区间 1-6 秒），实际用 Windows
+Media Player Legacy 打开。首张截图显示播放器已加载文件并播放至结尾；重新打开后在第 3 秒截屏，
+视频画面正常渲染但没有可见字幕，因而不能声称通过“显示”或“关闭”动作。本机检查确认没有
+`C:\\Program Files\\VideoLAN\\VLC\\vlc.exe`、`C:\\Program Files (x86)\\VideoLAN\\VLC\\vlc.exe`、
+`bin\\ffplay.exe`、`mpv`、`ffplay` 或 `vlc` 命令，无法在本环境找到另一款支持 MP4 mov_text
+且能实际操作字幕开关的播放器。截图保留为 `assets/samples/f15_wmp_open.png` 和
+`assets/samples/f15_wmp_subtitle_visible.png`，仅记录真实观察，**不是通过证据**。F15 继续为
+`implemented`。
+
+---
+
+### F15 视频内嵌字幕轨 — in_progress @ 2026-09-06T10:05:27+08:00
+
+用户要求实现 F15，并再次明确不改变现有功能、不出现范围蔓延。F06/F08/F10/F14 依赖均为
+`verified`；`bash init.sh --check` 通过（19 项 OK、1 项 WSL 提示、0 项失败）。本次仅实现默认关闭
+的 MP4 `mov_text` 软字幕轨、字幕与配音一起导出、以及不生成配音的纯字幕保留原声导出。
+不实现字幕烧录、样式编辑、多字幕轨、翻译、应用内字幕预览或设置持久化。
+
+---
+
+### F14 SRT 文件导入、编辑与导出 — verified @ 2026-09-06T09:14:17+08:00
+
+**实现范围**：只实现 F14。`Segment` 新增 `subtitle_end_time`，与 TTS 实际音频时长
+`duration` 分离；`parse_srt()` 保留多行文本并写入前者，`to_srt()` 优先使用前者。分段表格
+新增可为空、毫秒精度的「字幕结束时间」列；主界面新增「导入 SRT」「导出 SRT」入口。导入使用
+UTF-8/UTF-8 BOM，解析成功后才允许确认替换当前表格并清除旧配音；解析失败或取消不改变原表格
+和旧配音。文本或起始时间编辑会使旧配音失效，单独编辑字幕结束时间不会。配音生成保留
+`subtitle_end_time`，音频时间轴与视频处理代码没有改动；未实现字幕烧录、视频字幕轨或其他范围外功能。
+
+**测试与验证新增内容**：更新 `tests/test_script_parser.py`、既有表格列索引断言
+`tests/test_segment_preview_controls.py`；新增 `tests/test_segment_table.py`、
+`tests/test_main_window_srt.py` 及 `scripts/verify_srt_workflow.py`。真实工作流脚本使用
+offscreen `MainWindow` 和真实文件对话框槽位（仅替换交互式文件选择/确认返回值），验证 UTF-8 BOM
+导入、毫秒级多行字幕、重新生成后的元数据分离和独立 SRT 写出。脚本首次直接执行时因未加入仓库根
+目录导致 `ModuleNotFoundError`（exit 1）；补齐与既有脚本一致的 `sys.path` 启动配置后，按铁律
+重新完整执行所有 verification。
+
+| # | 类型 | 命令 / 检查 | 结果 |
+|---|---|---|---|
+| 1 | command | `python -m pytest tests/test_script_parser.py tests/test_segment_table.py tests/test_main_window_srt.py -q` | PASS — 45 passed in 13.01s (exit 0) |
+| 2 | command | `python scripts/verify_srt_workflow.py` | PASS — 真实 offscreen GUI 导入/导出、毫秒时间、多行文本、TTS 元数据分离全部断言通过 (exit 0) |
+| 3 | command | `python -m pytest tests/ -q` | PASS — 168 passed in 35.62s (exit 0) |
+| 4 | command | `python scripts/verify_export.py --all` | PASS — A1/A2/A3/A5 全部通过；时长误差 0.000s、最大起点偏差 0.180s、10 分钟导出 3.86s 且视频流未重编码 (exit 0) |
+| 5 | command | F14 架构边界 AST 检查 | PASS — `script_parser.py` 无 PyQt6/subprocess/requests import，`models.py` 无 PyQt6 import (exit 0) |
+
+---
+
+### F14 SRT 文件导入、编辑与导出 — in_progress @ 2026-09-06T09:14:17+08:00
+
+用户要求开始实现 F14，并明确要求不改变现有功能、不扩展范围。已确认 F04、F07 依赖均为
+`verified`，环境检查 `bash init.sh --check` 通过（19 项 OK、1 项 WSL 提示、0 项失败）。本次
+范围严格限于 F14 定义的 SRT 导入、可编辑起止时间、独立 SRT 导出，以及字幕结束时间与 TTS
+实际音频时长的分离；不实现字幕烧录、视频字幕轨或其他功能。
+
+---
+
+### F14 SRT 文件导入、编辑与导出 — pending @ 2026-09-06T09:08:18+08:00
+
+**需求确认与文档化，未实现代码。** 用户确认范围为「导入 SRT 生成配音，并能导出编辑后的
+独立 SRT 文件」，不包含字幕烧录或视频字幕轨；SRT 的结束时间只用于保存和导出字幕，配音仍只按
+起始时间定位并沿用既有时间轴截断规则。为避免现有实现中 `duration` 同时承载字幕时长和 TTS
+实际时长造成数据覆盖，已在 `docs/ARCHITECTURE.md` 明确后续实现需新增独立
+`subtitle_end_time` 字段。
+
+已更新 `docs/PRODUCT.md`（D6、R14 和行为约束）、`docs/ARCHITECTURE.md`（数据模型和模块
+契约）、`docs/VERIFICATION.md`（F14 验收场景）及 `feature_list.json`（新增待实现 F14）。
+本次没有修改 `src/`、`tests/`、`scripts/` 或依赖文件，也没有执行代码验证命令。
+
+---
+
 ## 1. 状态看板
 
 | Feature | 标题 | 依赖 | 状态 | 验证执行时间 |
@@ -808,5 +907,29 @@ FAIL Required test coverage of 90% not reached. Total coverage: 0.00%
 <sha>:path > file` 恢复内容），最终确认恢复后的文件与预期一致（`pytest tests/ -q` 158
 passed）。**教训已记入新增观察 O19**（`git checkout --` 会撤销整文件的全部未提交改动，做
 负向对照时应改用 `git diff > backup.patch` + `git apply` 或对称的逆操作原地改回）。
+
+---
+
+### F15 视频内嵌字幕轨 — pending @ 2026-09-06T10:02:50+08:00
+
+用户确认需求收敛范围，并明确要求只更新相关文档和功能清单，不修改现有代码。
+采用 MP4 `mov_text` 内嵌软字幕，视频导出选项默认关闭；字幕来自当前分段表格，
+使用字幕起止时间及 F14 的缺失结束时间推导规则，不自动跟随 TTS 实际时长修改已有时间。
+支持「字幕与配音一起导出」（保留 replace/overlay 和音量行为）及「仅添加字幕、保留原声」
+（不要求生成配音，无原音轨时不生成音轨）。视频优先复制，字幕不触发重编码、不改变视频时长；
+原有容器不兼容回退规则不变。
+
+新增轨标记默认显示，但播放器可忽略，用户可关闭或切换。仅新增一条字幕轨，不做烧录、
+样式编辑、多语言多轨管理、翻译、应用内视频字幕预览或新设置持久化。
+
+已更新 `docs/PRODUCT.md` D7/R15、`docs/ARCHITECTURE.md` F15 契约、
+`docs/VERIFICATION.md` F15 计划、`feature_list.json` 和 `session-handoff.md`。
+F15 依赖 F06/F08/F10/F14，状态为 `pending`，`verified_at`/`evidence` 均为 null。
+F14 原有“不封装字幕轨”仍限定于独立 SRT 功能，不改写它的历史验收或证据。
+计划中的测试/脚本尚未创建，所有 F15 功能验证均未执行；播放器显示/关闭需真实观察，
+不能用既有 A4 或容器探测证据冒充。
+
+本轮没有修改 `src/`、`tests/`、`scripts/`、依赖文件或既有自动生成缓存；
+此前 F14 的未提交代码和文档改动全部保留。未启动应用、安装依赖或进入实现阶段。
 
 ---

@@ -22,11 +22,12 @@ from src.core.script_parser import validate_segments
 from src.models import Segment
 
 _COL_START_TIME = 0
-_COL_TEXT = 1
-_COL_PREVIEW = 2
-_COL_REMOVE = 3
+_COL_END_TIME = 1
+_COL_TEXT = 2
+_COL_PREVIEW = 3
+_COL_REMOVE = 4
 
-_HEADERS = ["起始时间 (秒)", "文本", "", ""]
+_HEADERS = ["起始时间 (秒)", "字幕结束时间 (秒)", "文本", "", ""]
 
 
 class SegmentTable(QTableWidget):
@@ -39,22 +40,39 @@ class SegmentTable(QTableWidget):
     """
 
     preview_row_requested = pyqtSignal(int)
+    segments_edited = pyqtSignal(bool)
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(0, len(_HEADERS), parent)
         self.setHorizontalHeaderLabels(_HEADERS)
         header = self.horizontalHeader()
         header.setSectionResizeMode(_COL_TEXT, QHeaderView.ResizeMode.Stretch)
+        self.itemChanged.connect(self._on_item_changed)
 
-    def add_row(self, start_time: float = 0.0, text: str = "") -> None:
+    def _on_item_changed(self, item: QTableWidgetItem) -> None:
+        if item.column() == _COL_TEXT:
+            self.segments_edited.emit(True)
+
+    def add_row(
+        self, start_time: float = 0.0, text: str = "", subtitle_end_time: float | None = None
+    ) -> None:
         row = self.rowCount()
         self.insertRow(row)
 
         start_spin = QDoubleSpinBox(self)
         start_spin.setRange(0.0, 24 * 3600.0)
-        start_spin.setDecimals(2)
+        start_spin.setDecimals(3)
         start_spin.setValue(start_time)
+        start_spin.valueChanged.connect(lambda _value: self.segments_edited.emit(True))
         self.setCellWidget(row, _COL_START_TIME, start_spin)
+
+        end_spin = QDoubleSpinBox(self)
+        end_spin.setRange(-1.0, 24 * 3600.0)
+        end_spin.setDecimals(3)
+        end_spin.setSpecialValueText("未设置")
+        end_spin.setValue(-1.0 if subtitle_end_time is None else subtitle_end_time)
+        end_spin.valueChanged.connect(lambda _value: self.segments_edited.emit(False))
+        self.setCellWidget(row, _COL_END_TIME, end_spin)
 
         self.setItem(row, _COL_TEXT, QTableWidgetItem(text))
 
@@ -86,15 +104,29 @@ class SegmentTable(QTableWidget):
         for row in range(self.rowCount()):
             start_widget = self.cellWidget(row, _COL_START_TIME)
             start_time = start_widget.value() if start_widget is not None else 0.0
+            end_widget = self.cellWidget(row, _COL_END_TIME)
+            subtitle_end_time = (
+                end_widget.value() if end_widget is not None and end_widget.value() >= 0.0 else None
+            )
             text_item = self.item(row, _COL_TEXT)
             text = text_item.text() if text_item is not None else ""
-            segments.append(Segment(text=text, start_time=start_time))
+            segments.append(
+                Segment(
+                    text=text,
+                    start_time=start_time,
+                    subtitle_end_time=subtitle_end_time,
+                )
+            )
         return segments
 
     def set_segments(self, segments: List[Segment]) -> None:
-        self.setRowCount(0)
-        for segment in segments:
-            self.add_row(segment.start_time, segment.text)
+        self.blockSignals(True)
+        try:
+            self.setRowCount(0)
+            for segment in segments:
+                self.add_row(segment.start_time, segment.text, segment.subtitle_end_time)
+        finally:
+            self.blockSignals(False)
 
     def validate(self) -> None:
         """委托 core 层校验当前表格内容；不合法时抛出 `ScriptParseError`（由调用方翻译为中文提示）。"""
