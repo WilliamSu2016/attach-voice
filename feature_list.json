@@ -333,7 +333,7 @@
       "id": "F13",
       "title": "文档",
       "source_todo": 13,
-      "depends_on": ["F12"],
+      "depends_on": [],
       "requirements": ["PRODUCT.md D3 许可", "PRODUCT.md#6"],
       "files": ["README.md"],
       "acceptance": [
@@ -345,11 +345,11 @@
         {"type": "command", "command": "python -c \"t=open('README.md',encoding='utf-8').read(); [__import__('sys').exit(1) for k in ['ffmpeg','LGPL','edge-tts','安装','使用'] if k not in t]\"", "pass_condition": "exit code 0 — 必需章节关键词齐全"},
         {"type": "manual", "check": "按 README 步骤在干净环境从零走一遍安装与首次导出", "pass_condition": "无需额外查阅其他资料即可成功"}
       ],
-      "status": "deferred",
+      "status": "implemented",
       "blocked_reason": null,
-      "deferred_reason": "用户于 2026-09-05T19:15 明确指示本期不做文档（README）交付，主动挂起。非受阻状态。注意其 depends_on 为 F12，而 F12 亦已被用户挂起为 deferred；恢复时需与 F12 一并由用户决定。",
+      "deferred_reason": null,
       "verified_at": null,
-      "evidence": null
+      "evidence": "README 已创建，覆盖安装、运行、旁白、SRT、内嵌字幕、ffmpeg、运行环境、开发验证和许可证/第三方风险。`python -c \"t=open('README.md',encoding='utf-8').read(); [__import__('sys').exit(1) for k in ['ffmpeg','LGPL','edge-tts','安装','使用'] if k not in t]\"` 实际执行通过（exit 0）；README 引用的 README.md/requirements.txt/init.sh/src/__main__.py 路径存在检查通过（exit 0）。用户于 2026-09-06T10:33:20+08:00 明确要求编写 README，恢复 F13；本次仅交付源代码运行与使用文档，采用最小依赖拆分移除对 deferred F12 的依赖，F12 状态和范围不变。F13 的干净环境从零安装并首次导出人工验证尚未实际执行，因此状态为 implemented，不能标记 verified。"
     },
     {
       "id": "F14",

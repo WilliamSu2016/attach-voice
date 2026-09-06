@@ -5,6 +5,28 @@
 
 ---
 
+### F13 文档 — in_progress @ 2026-09-06T10:33:20+08:00
+
+用户明确要求创建 `README.md`。F13 原先因依赖 F12（PyInstaller 打包）一并被用户主动挂起；
+本次按用户指令采用最小依赖拆分，F13 移除 F12 依赖并恢复为 `in_progress`，只交付源代码安装、
+运行和使用说明。F12 仍为 `deferred`，不实施打包，不在 README 中声称已有可执行发行包。
+
+---
+
+### F13 文档 — implemented @ 2026-09-06T10:33:20+08:00
+
+创建 `README.md`，内容覆盖项目定位、功能、运行环境、PowerShell 安装/启动命令、旁白工作流、
+SRT 导入导出、MP4 `mov_text` 内嵌软字幕、ffmpeg 定位与 LGPL 运行时下载、开发验证，以及
+edge-tts 非官方接口风险。README 准确说明当前没有 PyInstaller 发行包，未声称 F12 已完成。
+
+| # | 类型 | 命令 / 检查 | 结果 |
+|---|---|---|---|
+| 1 | command | `python -c "t=open('README.md',encoding='utf-8').read(); [__import__('sys').exit(1) for k in ['ffmpeg','LGPL','edge-tts','安装','使用'] if k not in t]"` | PASS — exit 0 |
+| 2 | command | README 引用路径存在检查（`README.md`、`requirements.txt`、`init.sh`、`src/__main__.py`） | PASS — exit 0 |
+| 3 | manual | 在干净 Windows 环境按 README 从零安装并首次导出 | **未执行** — 当前是已有依赖/样例的开发环境，不能将其当作干净环境；F13 保持 `implemented` |
+
+---
+
 ### F15 视频内嵌字幕轨 — implemented @ 2026-09-06T10:05:27+08:00
 
 **实现范围**：仅 F15。`src/core/video_processor.py` 增加 `export_subtitles()`（仅字幕）与

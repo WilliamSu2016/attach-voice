@@ -9,30 +9,30 @@
 
 | 项 | 值 |
 |---|---|
-| 最后更新 | 2026-09-06T10:05:27+08:00 |
+| 最后更新 | 2026-09-06T10:33:20+08:00 |
 | 会话编号 | S017 |
-| 会话目标 | 实现 F15 视频内嵌字幕轨，不改变现有功能且不扩展范围 |
-| 会话结果 | **F15 已实现，状态 implemented（非 verified）。** 默认关闭的 MP4 mov_text 软字幕、仅字幕保留原声与字幕+既有配音路径均已完成。76 项定向、175 项全量、嵌入字幕端到端脚本及 A1/A2/A3/A5 均通过；Windows Media Player 实际打开时未显示字幕，本机无其他支持播放器可继续验证，因此显示/关闭人工验收未通过，严格不提前标 verified。 |
+| 会话目标 | 创建 README.md；只恢复 F13 文档交付，不实施 F12 打包 |
+| 会话结果 | **F13 已创建 README，状态 implemented（非 verified）。** 文档关键词和命令路径检查通过；干净环境的首次安装/导出人工验收未执行。F13 已与 deferred F12 拆分依赖，F12 继续挂起且未实施。 |
 | 上次会话结果 | **本期范围内完成，四处 GUI 交互问题已处理**。F11 `verified`；F12/F13 `deferred`（用户指示）。缺陷修复 1：重新生成配音后试听放旧配音（O16/O17/O18）。缺陷修复 2：逐段独立试听按钮 + 全局按序连续播放。缺陷修复 3：全局试听改为按时间轴渲染播放。缺陷修复 4：`_build_timeline_plan()` 新增 `require_video` 参数，未选视频时改用最后一段配音结束时间作为时间轴总长；`_on_export_audio_only_clicked`/`_on_preview_clicked` 均传 `require_video=False`，仅 `_build_project_and_plan`（供「导出视频」使用）仍传 `True`。`tests/test_segment_preview_controls.py` 更新为 8 条用例，`scripts/verify_segment_preview_controls.py` 新增"清空视频后仍能正常渲染播放"场景，共 10/10 PASS。全量测试 **158 passed**。 |
 
 ---
 
 ## 当前项目状态
 
-**阶段**：`F15 已实现，待人工验证`
+**阶段**：`F13/F15 已实现，待人工验证`
 
 | 指标 | 值 |
 |---|---|
 | 总 feature 数 | 15 |
 | verified | **12**（F01–F11、F14） |
-| implemented（待验证） | 1（F15 视频内嵌字幕轨） |
+| implemented（待验证） | 2（F13 文档、F15 视频内嵌字幕轨） |
 | in_progress | 0 |
 | blocked | 0 |
-| **deferred** | **2（F12 PyInstaller 打包、F13 文档）— 用户主动挂起** |
+| **deferred** | **1（F12 PyInstaller 打包）— 用户主动挂起** |
 | pending | 0 |
 
-**完成判定**：F01–F11、F14 仍为 `verified`，F15 为 `implemented`，扩展后的范围尚未完成。
-F12/F13 仍为用户主动挂起的 `deferred`，不计入完成。原有 A1–A5 证据不代表 F15 已验证。
+**完成判定**：F01–F11、F14 仍为 `verified`，F13/F15 为 `implemented`，扩展后的范围尚未完成。
+F12 仍为用户主动挂起的 `deferred`，不计入完成。原有 A1–A5 证据不代表 F15 已验证。
 
 **F15 人工验收阻碍**：已生成 `assets/samples/f15_embedded_subtitles_manual.mp4` 并实际在 Windows
 Media Player Legacy 打开：播放至结尾及字幕显示区间（第 3 秒）均已截图；后者未显示字幕，因此
@@ -45,7 +45,6 @@ ffprobe 的字幕轨证据替代这条人工观察。
 | Feature | 标题 | `deferred_reason` 摘要 |
 |---|---|---|
 | F12 | PyInstaller 打包 | 用户于 2026-09-05T19:15 指示本期不做。**非受阻**：F11 已 verified，依赖满足，代码侧无已知障碍。恢复由用户决定改回 `pending`。 |
-| F13 | 文档（README） | 用户于 2026-09-05T19:15 指示本期不做。**非受阻**。其 `depends_on` 为 F12，F12 亦已挂起，恢复时需与 F12 一并由用户决定。 |
 
 **环境**：`.venv` 可用（Windows 侧 Python 3.11.0）。PyQt6 6.9.1。`bin/` 下 `ffmpeg.exe`/`ffprobe.exe` 可用。
 本机媒体播放器：**已安装** Windows Media Player 与 Google Chrome，**未安装** VLC。
